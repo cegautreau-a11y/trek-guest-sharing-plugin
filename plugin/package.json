@@ -1,0 +1,10 @@
+{
+  "name": "trek-plugin-guest-portal",
+  "version": "1.0.2",
+  "private": true,
+  "type": "commonjs",
+  "description": "TREK Guest Portal trip-page plugin",
+  "devDependencies": {
+    "trek-plugin-sdk": "^1.4.0"
+  }
+}

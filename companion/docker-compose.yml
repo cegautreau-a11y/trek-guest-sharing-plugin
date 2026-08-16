@@ -1,0 +1,92 @@
+# TREK Guest Portal v1.0.2 - hardened companion service
+# Recommended: merge this service into the SAME Compose/Portainer stack as
+# TREK's `app` service so TREK_HOST=app resolves on the stack network.
+services:
+  trek-guest-portal:
+    image: python:3.12-alpine
+    container_name: trek-guest-portal
+    restart: unless-stopped
+    read_only: true
+    user: "${GUEST_PORTAL_UID:-65532}:${GUEST_PORTAL_GID:-65532}"
+
+    # If Apache/Nginx runs on this Docker host, use 127.0.0.1.
+    # If the reverse proxy is remote, bind to one specific host/LAN IP and
+    # firewall TCP/8088 so only the proxy can reach it.
+    ports:
+      - "${GUEST_PORTAL_BIND_IP:-127.0.0.1}:8088:8080"
+
+    environment:
+      - LISTEN_PORT=8080
+      - TREK_HOST=${TREK_HOST:-app}
+      - TREK_PORT=${TREK_PORT:-3000}
+      - PUBLIC_ROOT=/srv/public
+      # REQUIRED: scheme + hostname only. No /guest-portal path.
+      - PUBLIC_ORIGIN=${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN, e.g. https://trek.example.com}
+      - COOKIE_PATH=${COOKIE_PATH:-/guest-portal/}
+      - SESSION_TTL_SECONDS=${SESSION_TTL_SECONDS:-43200}
+      - SESSION_MAX=${SESSION_MAX:-2048}
+      - SESSION_CREATE_PER_MINUTE=${SESSION_CREATE_PER_MINUTE:-120}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # Live flight integration. An empty secret disables live provider lookup;
+      # scheduled TREK transport cards can still render from the public share.
+      - AERODATABOX_API_KEY_FILE=/run/secrets/aerodatabox_api_key
+      - AERODATABOX_TIMEOUT=${AERODATABOX_TIMEOUT:-10}
+      - AERODATABOX_MIN_INTERVAL=${AERODATABOX_MIN_INTERVAL:-1.6}
+      - AERODATABOX_429_RETRIES=${AERODATABOX_429_RETRIES:-2}
+      - AERODATABOX_429_BACKOFF=${AERODATABOX_429_BACKOFF:-2.5}
+      - ADSB_TIMEOUT=${ADSB_TIMEOUT:-8}
+
+      # Guest Portal-owned persistent cache.
+      - GUEST_CACHE_DB=/cache/guest-portal.db
+      - GUEST_CACHE_MAX_ROWS=${GUEST_CACHE_MAX_ROWS:-512}
+
+      # Optional Immich integration for original capture dates.
+      - IMMICH_URL=${IMMICH_URL:-}
+      - IMMICH_API_KEY_FILE=/run/secrets/immich_api_key
+      - IMMICH_VERIFY_TLS=${IMMICH_VERIFY_TLS:-true}
+      - IMMICH_TIMEOUT=${IMMICH_TIMEOUT:-15}
+      - IMMICH_DATE_CACHE_TTL=${IMMICH_DATE_CACHE_TTL:-86400}
+      - PHOTO_METADATA_PREFIX_BYTES=${PHOTO_METADATA_PREFIX_BYTES:-2097152}
+      - PHOTO_DATE_CACHE_TTL=${PHOTO_DATE_CACHE_TTL:-21600}
+
+    volumes:
+      - type: bind
+        source: ${GUEST_PORTAL_ROOT:-/opt/trek-guest-portal}/public
+        target: /srv/public
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GUEST_PORTAL_ROOT:-/opt/trek-guest-portal}/server
+        target: /srv/server
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GUEST_PORTAL_ROOT:-/opt/trek-guest-portal}/cache
+        target: /cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GUEST_PORTAL_ROOT:-/opt/trek-guest-portal}/secrets/immich_api_key
+        target: /run/secrets/immich_api_key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${GUEST_PORTAL_ROOT:-/opt/trek-guest-portal}/secrets/aerodatabox_api_key
+        target: /run/secrets/aerodatabox_api_key
+        read_only: true
+        bind:
+          create_host_path: false
+
+    command: ["python", "/srv/server/server.py"]
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 256m

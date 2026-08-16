@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Guest Portal</title>
+  <style>
+    :root { color-scheme:light dark; --bg:#f6f7f9; --surface:#fff; --surface2:#f4f6f8; --text:#171a1f; --muted:#667085; --border:#d9dee7; --accent:#2563eb; --accentText:#fff; --danger:#d92d20; }
+    html[data-theme="dark"] { --bg:#0d1117; --surface:#151b23; --surface2:#1b2430; --text:#f1f5f9; --muted:#9aa7b5; --border:#2d3745; }
+    *{box-sizing:border-box} body{margin:0;padding:22px;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:900px;margin:auto}.hero{margin-bottom:18px}h1{font-size:27px;margin:0 0 6px}h2{font-size:18px;margin:0 0 10px}.muted,.hint{color:var(--muted)}.hint{font-size:12px}.card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px;margin:14px 0;box-shadow:0 8px 30px rgba(0,0,0,.05)}.notice{border-left:3px solid var(--accent);background:var(--surface2);padding:11px 13px;border-radius:9px}.warning{border-left-color:#f79009}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}.field{display:flex;flex-direction:column;gap:6px}.full{grid-column:1/-1}label{font-weight:700}input{width:100%;border:1px solid var(--border);border-radius:10px;background:var(--surface2);color:var(--text);padding:11px 12px;font:inherit;outline:none}input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.15)}button{border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:10px;padding:10px 14px;font:inherit;font-weight:700;cursor:pointer}.primary{background:var(--accent);color:var(--accentText);border-color:transparent}.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:16px}.linkbox{display:flex;gap:8px}.linkbox input{flex:1}.status{display:none;margin-top:12px;padding:10px 12px;border-radius:10px}.status.show{display:block}.status.ok{background:rgba(18,183,106,.14)}.status.err{background:rgba(240,68,56,.14)}code{background:var(--surface2);padding:2px 5px;border-radius:5px}.steps{margin:10px 0 0;padding-left:20px}.steps li{margin:7px 0}@media(max-width:700px){body{padding:14px}.grid{grid-template-columns:1fr}.full{grid-column:auto}.linkbox{flex-direction:column}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <div class="hero">
+    <h1>Guest Portal</h1>
+    <div class="muted">Create one rich guest link for the TREK plan and optional Journey photos.</div>
+  </div>
+
+  <section class="card">
+    <h2>Guest portal setup</h2>
+    <div class="notice warning"><strong>v1.0.2 security model:</strong> The anonymous portal runs in the hardened companion container, normally reverse-proxied at <code>/guest-portal/</code>. Share tokens stay in the guest-link fragment and are exchanged once for an HttpOnly guest session; subsequent API URLs contain no bearer tokens.</div>
+    <div class="grid">
+      <div class="field full">
+        <label for="portalBase">Guest Portal web address</label>
+        <input id="portalBase" type="text" placeholder="/guest-portal/">
+        <div class="hint">Use <code>/guest-portal/</code> when the companion container is reverse-proxied under the same TREK hostname. This is recommended because the portal can call TREK's public APIs same-origin.</div>
+      </div>
+      <div class="field full">
+        <label for="tripShare">TREK Trip Share URL or token *</label>
+        <input id="tripShare" type="text" autocomplete="off" placeholder="https://trek.example.com/shared/…">
+        <div class="hint">The native TREK share remains the authority for trip access. The guest portal itself shows only Plan, Flights, Reservations and Photos.</div>
+      </div>
+      <div class="field full">
+        <label for="journeyShare">Journey public share URL or token</label>
+        <input id="journeyShare" type="text" autocomplete="off" placeholder="Optional — enables Photos">
+      </div>
+      <div class="field full">
+        <label for="title">Guest portal title</label>
+        <input id="title" type="text" maxlength="160" placeholder="Defaults to the trip title">
+      </div>
+    </div>
+    <div class="actions"><button id="save" class="primary">Save Guest Portal</button></div>
+    <div id="status" class="status"></div>
+  </section>
+
+  <section class="card" id="linkCard" hidden>
+    <h2>Your guest link</h2>
+    <div class="linkbox"><input id="guestLink" type="text" readonly><button id="copy">Copy link</button><button id="open">Open</button></div>
+    <p class="hint">The TREK/Journey share tokens are kept in the URL <strong>fragment</strong> after <code>#</code>. The browser sends them once in a JSON POST body to establish a Secure, HttpOnly guest session; they are never placed in API request URLs. Anyone who has the original guest URL has the same read-only access as the underlying TREK share links.</p>
+    <div class="notice"><strong>Revocation:</strong> delete/regenerate the normal TREK share link (and Journey share if used). Because the portal intentionally reuses those public permissions, the plugin does not pretend to provide a separate revocation boundary.</div>
+  </section>
+</main>
+<script>
+(() => {
+  let context = null;
+  let currentPortal = null;
+  let seq = 0;
+  let parentOrigin = '';
+  const pending = new Map();
+  const $ = id => document.getElementById(id);
+
+  function invoke(sub, method='GET', body) {
+    return new Promise((resolve,reject) => {
+      const requestId = 'gp-' + Date.now() + '-' + (++seq);
+      pending.set(requestId,{resolve,reject});
+      if(!parentOrigin){ pending.delete(requestId); return reject(new Error('TREK parent origin is not established yet.')); }
+      window.parent.postMessage({type:'trek:invoke',requestId,sub,method,body},parentOrigin);
+      setTimeout(() => { if (pending.has(requestId)) { pending.delete(requestId); reject(new Error('TREK did not respond to the plugin request.')); } },15000);
+    });
+  }
+  function notify(level,message){ if(parentOrigin) window.parent.postMessage({type:'trek:notify',level,message},parentOrigin); }
+  function openExternal(url){ if(parentOrigin && /^https?:\/\//i.test(String(url||''))) window.parent.postMessage({type:'trek:openExternal',url},parentOrigin); }
+  function status(message,ok){ const el=$('status'); el.textContent=message; el.className='status show '+(ok?'ok':'err'); }
+
+  function normalizedBase(value) {
+    const raw=String(value||'').trim()||'/guest-portal/';
+    try {
+      const base = new URL(raw, context?.hostOrigin || window.location.href);
+      base.hash=''; base.search='';
+      if(!base.pathname.endsWith('/')) base.pathname += '/';
+      return base.toString();
+    } catch(_) { return ''; }
+  }
+
+  function guestUrl(portal) {
+    if(!portal?.shareToken) return '';
+    const base=normalizedBase(portal.portalBase);
+    if(!base) return '';
+    const h=new URLSearchParams();
+    h.set('trip',portal.shareToken);
+    if(portal.journeyToken) h.set('journey',portal.journeyToken);
+    if(portal.title) h.set('title',portal.title);
+    return base + '#' + h.toString();
+  }
+
+  function render() {
+    $('linkCard').hidden=!currentPortal;
+    if(currentPortal) $('guestLink').value=guestUrl(currentPortal);
+  }
+
+  async function loadConfig() {
+    if(!context?.tripId) return;
+    try {
+      const data=await invoke('/config?tripId='+encodeURIComponent(context.tripId));
+      currentPortal=data.portal||null;
+      $('title').value=currentPortal?.title||data.trip?.title||'';
+      $('tripShare').value=currentPortal?.shareToken||'';
+      $('journeyShare').value=currentPortal?.journeyToken||'';
+      $('portalBase').value=currentPortal?.portalBase||'/guest-portal/';
+      render();
+    } catch(err){ status(err.message||'Unable to load Guest Portal.',false); }
+  }
+
+  window.addEventListener('message',event => {
+    if(event.source!==window.parent) return;
+    const m=event.data||{};
+    if(!parentOrigin){
+      if(m.type!=='trek:context' || !event.origin || event.origin==='null') return;
+      parentOrigin=event.origin;
+    } else if(event.origin!==parentOrigin) return;
+    if(m.type==='trek:context') {
+      const changed=!context||context.tripId!==m.tripId;
+      context=m;
+      document.documentElement.dataset.theme=m.theme==='dark'?'dark':'light';
+      if(changed) loadConfig();
+      return;
+    }
+    if(m.type==='trek:response'&&pending.has(m.requestId)){ const p=pending.get(m.requestId); pending.delete(m.requestId); p.resolve(m.data); }
+    if(m.type==='trek:error'&&pending.has(m.requestId)){ const p=pending.get(m.requestId); pending.delete(m.requestId); p.reject(new Error(m.message||'Plugin request failed')); }
+  });
+
+  $('save').addEventListener('click',async()=>{
+    if(!context?.tripId) return status('Open this plugin from inside a trip.',false);
+    $('save').disabled=true;
+    try {
+      const data=await invoke('/config','POST',{
+        tripId:context.tripId,
+        portalBase:$('portalBase').value,
+        tripShare:$('tripShare').value,
+        journeyShare:$('journeyShare').value,
+        title:$('title').value,
+      });
+      currentPortal=data.portal;
+      $('portalBase').value=currentPortal.portalBase;
+      $('tripShare').value=currentPortal.shareToken;
+      $('journeyShare').value=currentPortal.journeyToken||'';
+      $('title').value=currentPortal.title||'';
+      render(); status('Guest Portal saved.',true); notify('success','Guest Portal saved');
+    } catch(err){ status(err.message||'Unable to save.',false); }
+    finally{$('save').disabled=false;}
+  });
+  $('copy').addEventListener('click',async()=>{
+    try{ await navigator.clipboard.writeText($('guestLink').value); status('Guest link copied.',true); }
+    catch(_){ $('guestLink').select(); document.execCommand('copy'); status('Guest link copied.',true); }
+  });
+  $('open').addEventListener('click',()=>openExternal($('guestLink').value));
+})();
+</script>
+</body>
+</html>

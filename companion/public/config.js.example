@@ -1,0 +1,14 @@
+window.GUEST_PORTAL_CONFIG = {
+  // Paste the same public Mapbox token (pk....) used in TREK Settings -> Map.
+  mapboxAccessToken: '',
+
+  // To mirror TREK's default Mapbox planner, keep Standard.
+  // Other TREK presets include standard-satellite, streets-v12, outdoors-v12,
+  // light-v11, dark-v11, satellite-v9, satellite-streets-v12,
+  // navigation-day-v1 and navigation-night-v1.
+  mapboxStyle: 'mapbox://styles/mapbox/standard',
+
+  // TREK enables 3D by default for Mapbox unless disabled in user settings.
+  mapbox3d: true,
+  mapboxHighQuality: false
+};
