@@ -422,7 +422,7 @@ body { overflow-x:hidden; padding-left:env(safe-area-inset-left); padding-right:
 .flight-weather { margin:0 12px 12px; padding:9px 10px; border-radius:10px; background:#f8fafc; border:1px solid var(--border); display:flex; flex-wrap:wrap; gap:4px 10px; align-items:center; color:#475467; font-size:11px; }
 .flight-weather strong { color:#344054; }
 
-/* v0.3.11 flight refresh countdown */
+/* Flight refresh countdown and provider cadence */
 .flight-refresh-heading {
   display:flex;
   flex-direction:column;
@@ -436,6 +436,8 @@ body { overflow-x:hidden; padding-left:env(safe-area-inset-left); padding-right:
 }
 .flight-refresh-heading span { color:var(--muted); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
 .flight-refresh-heading strong { font-size:14px; color:var(--text); }
+.flight-refresh-heading small { color:var(--muted); font-size:10px; line-height:1.3; text-align:right; }
 @media (max-width: 700px) {
   .flight-refresh-heading { align-items:flex-start; width:100%; min-width:0; box-sizing:border-box; }
+  .flight-refresh-heading small { text-align:left; }
 }

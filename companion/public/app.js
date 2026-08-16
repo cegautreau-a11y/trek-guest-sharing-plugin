@@ -30,7 +30,68 @@
   let lightboxIndex = 0;
   const flightRefreshTimers = new Map();
   const flightNextRefreshAt = new Map();
+  const flightNextApiRefreshAt = new Map();
+  const flightApiWindowOpen = new Map();
   let flightCountdownTimer = null;
+
+  // Browser telemetry is session-protected and goes to the same companion
+  // container log. It intentionally sends operational metadata only.
+  let telemetryReady = false;
+  const telemetryQueue = [];
+  const telemetryStartedAt = performance.now();
+
+  function cleanTelemetryFields(fields) {
+    const out = {};
+    if (!fields || typeof fields !== 'object') return out;
+    Object.entries(fields).slice(0, 32).forEach(([key, value]) => {
+      if (/token|secret|password|passwd|api.?key|authorization|cookie|session|confirmation|email|phone/i.test(key)) return;
+      if (value == null || typeof value === 'boolean' || typeof value === 'number') out[key] = value;
+      else if (typeof value === 'string') out[key] = value.split('#')[0].slice(0, 220);
+      else if (Array.isArray(value)) out[key] = value.slice(0, 8).map(v => String(v).slice(0, 40));
+    });
+    return out;
+  }
+
+  function sendClientEvent(item) {
+    try {
+      fetch('api/client-log', {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store', keepalive: true,
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item),
+      }).catch(() => {});
+    } catch (_) {}
+  }
+
+  function clientLog(event, fields = {}, level = 'info') {
+    const item = { event, level, fields: cleanTelemetryFields({
+      tab: activeTab,
+      elapsed_ms: Math.round(performance.now() - telemetryStartedAt),
+      viewport_w: window.innerWidth,
+      viewport_h: window.innerHeight,
+      online: navigator.onLine,
+      ...fields,
+    }) };
+    if (!telemetryReady) {
+      if (telemetryQueue.length < 40) telemetryQueue.push(item);
+      return;
+    }
+    sendClientEvent(item);
+  }
+
+  function enableTelemetry() {
+    telemetryReady = true;
+    while (telemetryQueue.length) sendClientEvent(telemetryQueue.shift());
+  }
+
+  window.addEventListener('error', e => clientLog('browser.error', {
+    message: String(e.message || 'JavaScript error').slice(0, 180),
+    source: String(e.filename || '').split('#')[0].slice(0, 180), line: e.lineno || 0, column: e.colno || 0,
+  }, 'error'));
+  window.addEventListener('unhandledrejection', e => clientLog('browser.unhandled_rejection', {
+    message: String(e.reason?.message || e.reason || 'Unhandled rejection').slice(0, 180),
+  }, 'error'));
+  window.addEventListener('online', () => clientLog('browser.network', { state: 'online' }));
+  window.addEventListener('offline', () => clientLog('browser.network', { state: 'offline' }, 'warning'));
+  document.addEventListener('visibilitychange', () => clientLog('browser.visibility', { state: document.visibilityState }));
 
   function esc(value) {
     return String(value == null ? '' : value)
@@ -188,13 +249,19 @@
   }
 
   async function fetchJson(url) {
+    const started = performance.now();
+    clientLog('api.request_start', { endpoint: String(url).split('?')[0] });
     const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+    const apiReq = res.headers.get('X-Guest-Request-ID') || '';
     if (!res.ok) {
       let detail = '';
       try { detail = (await res.json()).error || ''; } catch (_) {}
+      clientLog('api.request_failed', { endpoint: String(url).split('?')[0], status: res.status, api_req: apiReq, elapsed_ms: Math.round(performance.now()-started) }, 'warning');
       throw new Error(detail || `Request failed (${res.status})`);
     }
-    return res.json();
+    const data = await res.json();
+    clientLog('api.request_complete', { endpoint: String(url).split('?')[0], status: res.status, api_req: apiReq, elapsed_ms: Math.round(performance.now()-started) });
+    return data;
   }
 
 
@@ -212,6 +279,8 @@ async function establishGuestSession() {
     try { detail = (await res.json()).error || ''; } catch (_) {}
     throw new Error(detail || `Session request failed (${res.status})`);
   }
+  enableTelemetry();
+  clientLog('session.established', { has_journey: !!journeyToken, api_req: res.headers.get('X-Guest-Request-ID') || '' });
   // The native TREK/Journey bearer tokens are needed only once. After the
   // companion has issued its HttpOnly guest-session cookie, remove them from
   // the visible URL and browser history entry. Refreshes continue using the
@@ -220,6 +289,7 @@ async function establishGuestSession() {
 }
 
 async function load() {
+  clientLog('portal.load_start', { has_share_fragment: !!shareToken, has_journey_fragment: !!journeyToken });
   try {
     if (shareToken) await establishGuestSession();
     const tripPromise = fetchJson('api/trip');
@@ -228,10 +298,12 @@ async function load() {
     tripData = data[0];
     journeyData = data[1] || null;
     gallery = journeyData?.permissions?.share_gallery ? buildChronologicalGallery(journeyData, photoCaptureDates) : [];
+    clientLog('portal.data_loaded', { days: asArray(tripData?.days).length, reservations: asArray(tripData?.reservations).length, accommodations: asArray(tripData?.accommodations).length, journey: !!journeyData, photos: gallery.length });
     renderShell();
     selectTab('plan');
     enrichPhotoCaptureDates();
   } catch (err) {
+    clientLog('portal.load_failed', { message: String(err?.message || 'load failed').slice(0,180) }, 'error');
     const missing = !shareToken ? ' Open the original Guest Portal share link again.' : '';
     fatal(`This guest portal could not be loaded. ${err.message || ''}${missing}`);
   }
@@ -243,16 +315,19 @@ function fatal(message) {
 
   async function enrichPhotoCaptureDates() {
     if (!journeyData?.permissions?.share_gallery || !asArray(journeyData?.gallery).length) return;
+    clientLog('photos.date_enrichment_start', { photos: asArray(journeyData?.gallery).length });
     try {
       const result = await fetchJson('api/photo-dates');
       if (!result || typeof result.dates !== 'object' || !result.dates) return;
       photoCaptureDates = result.dates;
       gallery = buildChronologicalGallery(journeyData, photoCaptureDates);
+      clientLog('photos.date_enrichment_complete', { resolved: Object.keys(photoCaptureDates || {}).length, photos: gallery.length });
       if (activeTab === 'photos') {
         const content = document.getElementById('content');
         if (content) renderPhotos(content);
       }
-    } catch (_) {
+    } catch (err) {
+      clientLog('photos.date_enrichment_failed', { message: String(err?.message || 'date enrichment failed').slice(0,180) }, 'warning');
       // Embedded capture-date enrichment is best-effort. Entry/import dates remain usable.
     }
   }
@@ -368,8 +443,10 @@ function fatal(message) {
   }
 
   function selectTab(id) {
+    const previousTab = activeTab;
     clearFlightRefreshTimers();
     activeTab = id;
+    clientLog('navigation.tab_select', { from: previousTab, to: id });
     document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
     destroyMap();
     const content = document.getElementById('content');
@@ -401,6 +478,7 @@ function fatal(message) {
 
   function renderPlan(content) {
     const shared = !!tripData?.permissions?.share_map;
+    clientLog('plan.render', { shared, days: asArray(tripData?.days).length });
     content.innerHTML = `
       <h2 class="section-title">Trip plan</h2>
       <p class="section-lead">Explore the itinerary and map together. Select a day or a stop to focus the map.</p>
@@ -431,6 +509,7 @@ function fatal(message) {
       const b = e.target.closest('[data-day]');
       if (!b) return;
       selectedDay = b.dataset.day;
+      clientLog('plan.day_select', { day: selectedDay });
       chips.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c.dataset.day === selectedDay));
       renderItinerary();
       refreshMapData(true);
@@ -439,6 +518,7 @@ function fatal(message) {
     document.getElementById('placeSearch').value = searchText;
     document.getElementById('placeSearch').addEventListener('input', e => {
       searchText = e.target.value;
+      clientLog('plan.search', { length: searchText.length });
       renderItinerary();
       refreshMapData(true);
     });
@@ -683,14 +763,17 @@ function fatal(message) {
   function initMap() {
     const mapEl = document.getElementById('map');
     if (!mapEl) return;
+    clientLog('map.init_start', { style: mapboxStyle(), mode_3d: mapbox3dEnabled(), high_quality: mapboxHighQuality() });
     mapTooltip = document.getElementById('mapHoverCard');
     if (!window.mapboxgl) {
+      clientLog('map.init_failed', { reason: 'mapbox-gl-missing' }, 'error');
       mapEl.innerHTML = '<div class="map-unavailable"><strong>Mapbox GL could not load.</strong><span>The itinerary is still available. Check guest-browser access to api.mapbox.com.</span></div>';
       return;
     }
     const token = mapboxToken();
     if (!token || !token.startsWith('pk.')) {
-      mapEl.innerHTML = '<div class="map-unavailable"><strong>No public Mapbox token is configured.</strong><span>Edit /datastore/trax-guest/public/config.js and paste the same pk… token used by TREK.</span></div>';
+      clientLog('map.init_failed', { reason: 'mapbox-token-missing' }, 'error');
+      mapEl.innerHTML = '<div class="map-unavailable"><strong>No public Mapbox token is configured.</strong><span>Edit the guest portal config.js and add a public pk… Mapbox token.</span></div>';
       return;
     }
 
@@ -711,8 +794,10 @@ function fatal(message) {
     const clearHoverOnMove = () => clearMapHover();
     map.on('movestart', clearHoverOnMove);
 
+    map.on('error', e => clientLog('map.error', { message: String(e?.error?.message || e?.message || 'Mapbox error').slice(0,180) }, 'warning'));
     map.on('load', () => {
       mapReady = true;
+      clientLog('map.loaded', { style: mapboxStyle(), places: currentMapPlaces.length });
       if (mapboxStyle() === 'mapbox://styles/mapbox/standard') {
         try { map.setTerrain(null); } catch (_) {}
       }
@@ -909,6 +994,7 @@ function fatal(message) {
     const controller = new AbortController();
     routeAbortController = controller;
     const profile = routeProfile(assignments);
+    clientLog('map.route_start', { day: selectedDay, profile, stops: assignments.length });
     const coordText = straight.map(([lng, lat]) => `${lng},${lat}`).join(';');
     const url = `${routeBase(profile)}/${coordText}?overview=full&geometries=geojson&steps=false`;
     try {
@@ -918,10 +1004,12 @@ function fatal(message) {
       const coords = data?.routes?.[0]?.geometry?.coordinates;
       if (serial !== routeRequestSerial || !Array.isArray(coords) || coords.length < 2) return;
       setRouteGeometry(coords);
+      clientLog('map.route_complete', { day: selectedDay, profile, points: coords.length });
       setRouteStatus('');
       if (fitAfter) fitMap();
     } catch (err) {
       if (err?.name === 'AbortError' || serial !== routeRequestSerial) return;
+      clientLog('map.route_failed', { day: selectedDay, profile, message: String(err?.message || 'route failed').slice(0,160) }, 'warning');
       // Keep the immediate straight-line route rather than hiding the day.
       setRouteStatus('Approximate route', 'approximate');
     }
@@ -1047,6 +1135,7 @@ function fatal(message) {
 
   function focusPlace(id) {
     selectedPlaceId = String(id);
+    clientLog('plan.stop_select', { place_id: selectedPlaceId, day: selectedDay });
     highlightPlace(selectedPlaceId);
     clearMapHover();
 
@@ -1197,9 +1286,11 @@ function fatal(message) {
 
   function formatCountdown(totalSeconds) {
     const seconds = Math.max(0, Math.ceil(Number(totalSeconds) || 0));
-    const hours = Math.floor(seconds / 3600);
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
+    if (days > 0) return `${days}d ${hours}h ${minutes}m`;
     if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
     if (minutes > 0) return `${minutes}m ${secs}s`;
     return `${secs}s`;
@@ -1207,24 +1298,37 @@ function fatal(message) {
 
   function updateFlightRefreshHeading() {
     const el = document.getElementById('flight-next-refresh');
+    const detail = document.getElementById('flight-api-refresh');
     if (!el || activeTab !== 'flights') return;
     const values = Array.from(flightNextRefreshAt.values());
     if (!values.length) {
       el.textContent = 'No flights to refresh';
+      if (detail) detail.textContent = '';
       return;
     }
     if (values.some(v => v === 'checking')) {
       el.textContent = 'Checking…';
+    } else {
+      const scheduled = values.filter(v => Number.isFinite(v));
+      if (!scheduled.length) el.textContent = 'No further refresh scheduled';
+      else {
+        const nextAt = Math.min(...scheduled);
+        const seconds = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
+        el.textContent = `in ${formatCountdown(seconds)}`;
+      }
+    }
+    if (!detail) return;
+    const apiValues = Array.from(flightNextApiRefreshAt.entries())
+      .filter(([,v]) => Number.isFinite(v));
+    if (!apiValues.length) {
+      detail.textContent = '';
       return;
     }
-    const scheduled = values.filter(v => Number.isFinite(v));
-    if (!scheduled.length) {
-      el.textContent = 'No further refresh scheduled';
-      return;
-    }
-    const nextAt = Math.min(...scheduled);
-    const seconds = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000));
-    el.textContent = `in ${formatCountdown(seconds)}`;
+    const [apiId, apiAt] = apiValues.reduce((best, item) => !best || item[1] < best[1] ? item : best, null);
+    const seconds = Math.max(0, Math.ceil((apiAt - Date.now()) / 1000));
+    detail.textContent = flightApiWindowOpen.get(apiId) === false
+      ? `Live provider window opens in ${formatCountdown(seconds)}`
+      : `Next provider refresh due in ${formatCountdown(seconds)}`;
   }
 
   function startFlightCountdown() {
@@ -1237,6 +1341,8 @@ function fatal(message) {
     flightRefreshTimers.forEach(timer => clearTimeout(timer));
     flightRefreshTimers.clear();
     flightNextRefreshAt.clear();
+    flightNextApiRefreshAt.clear();
+    flightApiWindowOpen.clear();
     if (flightCountdownTimer) clearInterval(flightCountdownTimer);
     flightCountdownTimer = null;
   }
@@ -1247,6 +1353,11 @@ function fatal(message) {
     const old = flightRefreshTimers.get(id);
     if (old) clearTimeout(old);
     const raw = Number(payload?._guestLive?.refreshAfterSeconds);
+    const apiRaw = Number(payload?._guestLive?.apiRefreshAfterSeconds);
+    const apiOpen = payload?._guestLive?.apiWindowOpen;
+    flightApiWindowOpen.set(id, apiOpen !== false);
+    if (Number.isFinite(apiRaw) && apiRaw >= 0) flightNextApiRefreshAt.set(id, Date.now() + apiRaw * 1000);
+    else flightNextApiRefreshAt.set(id, null);
     if (!Number.isFinite(raw) || raw <= 0) {
       flightRefreshTimers.delete(id);
       flightNextRefreshAt.set(id, null);
@@ -1286,8 +1397,9 @@ function fatal(message) {
     clearFlightRefreshTimers();
     const transports = transportReservations().slice().sort((a,b) => dateSortValue(a.reservation_time) - dateSortValue(b.reservation_time));
     const flights = transports.filter(r => reservationType(r) === 'flight');
+    clientLog('flights.render', { transports: transports.length, flights: flights.length });
     flights.forEach(r => flightNextRefreshAt.set(String(r.id), 'checking'));
-    content.innerHTML = `<div class="section-heading-row"><div><h2 class="section-title">Flights & transport</h2></div><div class="flight-refresh-heading"><span>Next auto refresh</span><strong id="flight-next-refresh">${flights.length ? 'Checking…' : 'No flights to refresh'}</strong></div></div>
+    content.innerHTML = `<div class="section-heading-row"><div><h2 class="section-title">Flights & transport</h2></div><div class="flight-refresh-heading"><span>Next auto refresh</span><strong id="flight-next-refresh">${flights.length ? 'Checking…' : 'No flights to refresh'}</strong><small id="flight-api-refresh"></small></div></div>
       ${transports.length ? `<div class="transport-list">${transports.map(transportCard).join('')}</div>` : '<div class="card empty">No transport reservations are shared.</div>'}`;
     startFlightCountdown();
     flights.forEach(r => loadLiveFlight(r));
@@ -1302,11 +1414,14 @@ function fatal(message) {
       updateFlightRefreshHeading();
     }
     try {
+      clientLog('flights.refresh_start', { reservation_id: id });
       const payload = await fetchJson(`api/flights/${encodeURIComponent(r.id)}`);
       if (!document.getElementById(`flight-live-${r.id}`)) return;
       target.innerHTML = renderFlightTrackerPayload(payload, r);
+      clientLog('flights.refresh_complete', { reservation_id: id, source: payload?._guestLive?.source || payload?.source || 'unknown', api_window_open: payload?._guestLive?.apiWindowOpen !== false, refresh_after: payload?._guestLive?.refreshAfterSeconds ?? null, api_refresh_after: payload?._guestLive?.apiRefreshAfterSeconds ?? null });
       scheduleLiveFlightRefresh(r, payload);
     } catch (err) {
+      clientLog('flights.refresh_failed', { reservation_id: id, message: String(err?.message || 'Live flight data unavailable').slice(0,180) }, 'warning');
       const msg = String(err?.message || 'Live flight data unavailable');
       target.innerHTML = `<div class="live-unavailable"><strong>Current flight information unavailable</strong><span>${esc(msg)}</span></div>`;
       scheduleLiveFlightRefresh(r, { _guestLive: { refreshAfterSeconds: 300 } });
@@ -1429,6 +1544,7 @@ function fatal(message) {
     const reservations = nonTransportReservations().slice().sort((a,b)=>dateSortValue(a.reservation_time||a.start_date)-dateSortValue(b.reservation_time||b.start_date));
     const accommodations = asArray(tripData?.accommodations).slice().sort((a,b)=>dateSortValue(a.check_in||a.start_date)-dateSortValue(b.check_in||b.start_date));
     const total = reservations.length + accommodations.length;
+    clientLog('reservations.render', { reservations: reservations.length, accommodations: accommodations.length, total });
     content.innerHTML = `<h2 class="section-title">Reservations</h2>
       ${total ? `<div class="reservation-sections">${accommodations.length?`<section><div class="subsection-title"><h3>Accommodations</h3><span>${accommodations.length}</span></div><div class="data-grid reservation-grid">${accommodations.map(accommodationCard).join('')}</div></section>`:''}${reservations.length?`<section><div class="subsection-title"><h3>Bookings</h3><span>${reservations.length}</span></div><div class="data-grid reservation-grid">${reservations.map(reservationCard).join('')}</div></section>`:''}</div>` : '<div class="card empty">No non-transport reservations are shared.</div>'}`;
   }
@@ -1454,6 +1570,7 @@ function fatal(message) {
       group.items.push({ photo, index });
     });
 
+    clientLog('photos.render', { photos: gallery.length, groups: groups.length, undated: groups.find(g => g.key === 'undated')?.items?.length || 0 });
     const galleryHtml = groups.map(group => {
       const dateLabel = group.key === 'undated'
         ? 'Undated'
@@ -1470,6 +1587,7 @@ function fatal(message) {
 
   function openLightbox(index) {
     if (!gallery.length) return;
+    clientLog('photos.lightbox_open', { index, total: gallery.length });
     lightboxIndex = Math.max(0, Math.min(index, gallery.length - 1));
     const lb = document.getElementById('lightbox');
     lb.hidden = false;
@@ -1477,6 +1595,7 @@ function fatal(message) {
     updateLightbox();
   }
   function closeLightbox() {
+    clientLog('photos.lightbox_close', { index: lightboxIndex, total: gallery.length });
     const lb = document.getElementById('lightbox');
     if (lb) lb.hidden = true;
     const video = document.getElementById('lbVideo');
@@ -1485,6 +1604,7 @@ function fatal(message) {
   }
   function moveLightbox(delta) {
     if (!gallery.length) return;
+    clientLog('photos.lightbox_move', { delta, from: lightboxIndex, total: gallery.length });
     lightboxIndex = (lightboxIndex + delta + gallery.length) % gallery.length;
     updateLightbox();
   }

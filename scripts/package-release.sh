@@ -12,7 +12,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 cp "$PLUGIN" "$COMPANION" "$TMP/"
 cp README.md SECURITY.md LICENSE CHANGELOG.md "$TMP/"
-cp docs/INSTALL.md docs/PREREQUISITES.md docs/TROUBLESHOOTING.md "$TMP/"
+cp docs/INSTALL.md docs/PREREQUISITES.md docs/CONFIGURATION.md docs/FLIGHTS.md docs/LOGGING.md docs/TROUBLESHOOTING.md "$TMP/"
 (
   cd "$TMP"
   zip -qr "$OLDPWD/$BUNDLE" .

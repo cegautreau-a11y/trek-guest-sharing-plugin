@@ -20,8 +20,8 @@ Immich and live AeroDataBox flight data are optional and can be added later.
 From the GitHub release, download:
 
 ```text
-trek-guest-portal-1.0.2.zip
-trek-guest-portal-companion-1.0.2-portainer.zip
+trek-guest-portal-1.0.4.zip
+trek-guest-portal-companion-1.0.4-portainer.zip
 ```
 
 The first file is the TREK plugin. **Do not unzip it before uploading it to TREK.**
@@ -37,7 +37,7 @@ In TREK:
 1. Sign in as an administrator.
 2. Open **Admin → Plugins**.
 3. Choose **Upload**.
-4. Select `trek-guest-portal-1.0.2.zip`.
+4. Select `trek-guest-portal-1.0.4.zip`.
 5. Review the requested permissions:
 
 ```text
@@ -65,7 +65,7 @@ Create it and extract the companion ZIP:
 
 ```bash
 sudo mkdir -p /opt/trek-guest-portal
-sudo unzip trek-guest-portal-companion-1.0.2-portainer.zip -d /opt/trek-guest-portal
+sudo unzip trek-guest-portal-companion-1.0.4-portainer.zip -d /opt/trek-guest-portal
 ```
 
 Expected files:
@@ -275,7 +275,7 @@ A healthy startup resembles:
 
 ```text
 INFO cache.persistent_ready db=/cache/guest-portal.db
-INFO startup version=1.0.2 ...
+INFO startup version=1.0.4 ...
 INFO integration.aerodatabox configured=True key_source=secret-file
 INFO integration.immich configured=True ...
 INFO integration.persistent_cache enabled=True ...
@@ -290,7 +290,7 @@ curl -s http://127.0.0.1:8088/health
 ```
 
 ```json
-{"ok":true,"version":"1.0.2"}
+{"ok":true,"version":"1.0.4"}
 ```
 
 Then test through the public origin:

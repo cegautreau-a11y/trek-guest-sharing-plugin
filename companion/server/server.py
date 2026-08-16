@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import http.client
 import hashlib
+import ipaddress
 import logging
 import json
 import mimetypes
 import os
 import pathlib
 import re
+import resource
 import secrets
+import shutil
 import sqlite3
 import sys
 import ssl
@@ -114,8 +117,25 @@ LIVE_FLIGHT_MAX_CACHE = int(os.environ.get("LIVE_FLIGHT_MAX_CACHE", "256"))
 GUEST_CACHE_DB = pathlib.Path(os.environ.get("GUEST_CACHE_DB", "/cache/guest-portal.db")).resolve()
 GUEST_CACHE_MAX_ROWS = int(os.environ.get("GUEST_CACHE_MAX_ROWS", "512"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").strip().upper() or "INFO"
+LOG_FORMAT = os.environ.get("LOG_FORMAT", "kv").strip().lower() or "kv"
+FULL_LOGGING = os.environ.get("FULL_LOGGING", "true").strip().lower() in {"1", "true", "yes", "on"}
+LOG_STATIC_REQUESTS = os.environ.get("LOG_STATIC_REQUESTS", "true").strip().lower() in {"1", "true", "yes", "on"}
+LOG_SAFE_REQUEST_HEADERS = os.environ.get("LOG_SAFE_REQUEST_HEADERS", "true").strip().lower() in {"1", "true", "yes", "on"}
+CLIENT_EVENT_LOGGING = os.environ.get("CLIENT_EVENT_LOGGING", "true").strip().lower() in {"1", "true", "yes", "on"}
+CLIENT_EVENT_RATE_PER_MINUTE = max(30, min(int(os.environ.get("CLIENT_EVENT_RATE_PER_MINUTE", "240")), 2000))
+CLIENT_EVENT_MAX_BODY = max(1024, min(int(os.environ.get("CLIENT_EVENT_MAX_BODY", "8192")), 65536))
+LOG_HEARTBEAT_SECONDS = max(60, min(int(os.environ.get("LOG_HEARTBEAT_SECONDS", "300")), 3600))
+LOG_CLIENT_IP = os.environ.get("LOG_CLIENT_IP", "false").strip().lower() in {"1", "true", "yes", "on"}
+TRUST_PROXY_HEADERS = os.environ.get("TRUST_PROXY_HEADERS", "false").strip().lower() in {"1", "true", "yes", "on"}
+CLIENT_IP_HEADER = os.environ.get("CLIENT_IP_HEADER", "X-Guest-Client-IP").strip() or "X-Guest-Client-IP"
+TRUSTED_PROXY_CIDRS_RAW = os.environ.get("TRUSTED_PROXY_CIDRS", "").strip()
+LOG_PROXY_DETAILS = os.environ.get("LOG_PROXY_DETAILS", "true").strip().lower() in {"1", "true", "yes", "on"}
+FLIGHT_API_WINDOW_HOURS = max(1.0, min(float(os.environ.get("FLIGHT_API_WINDOW_HOURS", "48")), 168.0))
+FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_POLL_SECONDS", "600")), 3600))
+FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
+FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "1.0.2"
+VERSION = "1.0.4"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -139,6 +159,88 @@ _sessions: dict[str, dict] = {}
 _sessions_lock = threading.Lock()
 _session_create_times: list[float] = []
 _session_rate_lock = threading.Lock()
+_client_event_times: dict[str, list[float]] = {}
+_client_event_rate_lock = threading.Lock()
+
+_log_context = threading.local()
+_metrics_lock = threading.Lock()
+_metrics = {
+    "http_requests": 0, "http_responses": 0, "client_events": 0,
+    "sessions_created": 0, "aerodatabox_calls": 0, "adsb_calls": 0,
+    "immich_calls": 0, "trek_calls": 0, "warnings": 0, "errors": 0,
+}
+_started_monotonic = time.monotonic()
+
+
+def _metric(name: str, amount: int = 1):
+    with _metrics_lock:
+        _metrics[name] = int(_metrics.get(name, 0)) + amount
+
+
+def _metrics_snapshot() -> dict:
+    with _metrics_lock:
+        return dict(_metrics)
+
+
+def _parse_trusted_proxy_networks(raw: str):
+    networks = []
+    for part in re.split(r"[\s,]+", raw or ""):
+        value = part.strip()
+        if not value:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(value, strict=False))
+        except ValueError:
+            # Fail closed: malformed entries are ignored and reported at startup.
+            pass
+    return tuple(networks)
+
+
+_TRUSTED_PROXY_NETWORKS = _parse_trusted_proxy_networks(TRUSTED_PROXY_CIDRS_RAW)
+
+
+def _valid_ip(value: str | None) -> str | None:
+    if not value:
+        return None
+    candidate = str(value).strip()
+    # The application-specific proxy header must contain exactly one address.
+    if not candidate or "," in candidate or len(candidate) > 128:
+        return None
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return None
+
+
+def _peer_is_trusted(peer: str | None) -> bool:
+    try:
+        addr = ipaddress.ip_address(str(peer or "").strip())
+    except ValueError:
+        return False
+    return any(addr in network for network in _TRUSTED_PROXY_NETWORKS)
+
+
+def _resolved_client(handler):
+    """Return (client_ip, source, peer_ip).
+
+    Forwarded client identity is accepted only from an explicitly trusted TCP
+    peer. The recommended Apache configuration populates X-Guest-Client-IP from
+    Apache's post-mod_remoteip REMOTE_ADDR, producing the correct address for
+    both Cloudflare traffic and local split-DNS traffic.
+    """
+    try:
+        peer = _valid_ip(handler.client_address[0]) or str(handler.client_address[0])
+    except Exception:
+        peer = "unknown"
+    if TRUST_PROXY_HEADERS and _peer_is_trusted(peer):
+        forwarded = _valid_ip(handler.headers.get(CLIENT_IP_HEADER))
+        if forwarded:
+            return forwarded, "trusted-proxy-header", peer
+        return peer, "trusted-proxy-missing-header", peer
+    if TRUST_PROXY_HEADERS and _TRUSTED_PROXY_NETWORKS:
+        return peer, "untrusted-peer", peer
+    return peer, "socket", peer
+
 
 _logger = logging.getLogger("trek-guest-portal")
 _logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
@@ -175,9 +277,30 @@ def _safe_request_target(raw_target: str) -> str:
 
 
 def log_event(level: int, event: str, **fields):
+    """Emit a structured operational event without secrets.
+
+    kv is human-friendly for `docker logs`; json is useful for log shippers.
+    Callers must never pass raw bearer tokens, API keys, cookies or passwords.
+    """
+    if level >= logging.ERROR:
+        _metric("errors")
+    elif level >= logging.WARNING:
+        _metric("warnings")
+    if event == "aerodatabox.request": _metric("aerodatabox_calls")
+    elif event.startswith("adsb.request"): _metric("adsb_calls")
+    elif event == "immich.asset_lookup_start": _metric("immich_calls")
+    elif event == "trek.upstream_start": _metric("trek_calls")
+    context = getattr(_log_context, "fields", None) or {}
+    merged = dict(context)
+    merged.update(fields)
+    if LOG_FORMAT == "json":
+        payload = {"event": event, **merged}
+        # The logging formatter already supplies timestamp/severity externally.
+        _logger.log(level, json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str))
+        return
     parts = [event]
-    for key, value in fields.items():
-        if value is None:
+    for key, value in merged.items():
+        if value is None or value == "":
             continue
         text = str(value).replace("\n", " ").replace("\r", " ")
         if len(text) > 500:
@@ -186,6 +309,45 @@ def log_event(level: int, event: str, **fields):
             text = json.dumps(text, ensure_ascii=False)
         parts.append(f"{key}={text}")
     _logger.log(level, " ".join(parts))
+
+
+def _begin_log_context(handler, target: str) -> None:
+    _metric("http_requests")
+    request_id = secrets.token_hex(4)
+    fields = {"req": request_id}
+    client_ip, client_source, peer_ip = _resolved_client(handler)
+    handler._resolved_client_ip = client_ip
+    handler._client_ip_source = client_source
+    handler._proxy_peer_ip = peer_ip
+    if LOG_CLIENT_IP:
+        fields["client"] = client_ip
+        fields["client_source"] = client_source
+        if LOG_PROXY_DETAILS and peer_ip != client_ip:
+            fields["proxy_peer"] = peer_ip
+        if LOG_PROXY_DETAILS:
+            cf_ray = (handler.headers.get("CF-Ray") or "").strip()[:96]
+            cf_country = (handler.headers.get("CF-IPCountry") or "").strip()[:8]
+            if cf_ray:
+                fields["cf_ray"] = cf_ray
+            if cf_country:
+                fields["cf_country"] = cf_country
+    _log_context.fields = fields
+    handler._request_id = request_id
+    handler._request_started = time.monotonic()
+    path = urlsplit(target).path
+    level = logging.INFO if path.startswith("/api/") else logging.DEBUG
+    ua = (handler.headers.get("User-Agent") or "")[:160]
+    extra = {}
+    if FULL_LOGGING and LOG_SAFE_REQUEST_HEADERS:
+        extra = {
+            "host": (handler.headers.get("Host") or "")[:160] or "none",
+            "accept": (handler.headers.get("Accept") or "")[:160] or "none",
+            "accept_language": (handler.headers.get("Accept-Language") or "")[:96] or "none",
+            "sec_fetch_site": (handler.headers.get("Sec-Fetch-Site") or "")[:32] or "none",
+            "sec_fetch_mode": (handler.headers.get("Sec-Fetch-Mode") or "")[:32] or "none",
+            "sec_fetch_dest": (handler.headers.get("Sec-Fetch-Dest") or "")[:32] or "none",
+        }
+    log_event(level, "http.request_start", method=handler.command, target=_safe_request_target(target), user_agent=ua or "none", **extra)
 
 
 HOP_BY_HOP = {
@@ -309,20 +471,33 @@ def write_persistent_live_cache(trip_id: str, reservation_id: str, fetched_at: i
 
 
 def _decorate_cached_payload(fetched_ms: int, payload: dict, trip_id: str, reservation_id: str, source_event: str) -> dict | None:
-    """Return a fresh cached payload with updated age/next-refresh metadata."""
-    now_ms = int(time.time() * 1000)
-    ttl = _flight_ttl_seconds(payload)
-    age_ms = max(0, now_ms - int(fetched_ms))
-    if ttl != 0 and age_ms >= ttl * 1000:
-        return None
-    out = json.loads(json.dumps(payload))
-    remaining = 0 if ttl == 0 else max(15, int((ttl * 1000 - age_ms + 999) // 1000))
-    out.setdefault("_guestCache", {})["ageSeconds"] = age_ms // 1000
-    out["_guestCache"]["fetchedAt"] = int(fetched_ms)
-    out["_guestCache"]["stale"] = False
-    out.setdefault("_guestLive", {})["refreshAfterSeconds"] = remaining
-    out["_guestLive"].setdefault("fetchedAt", int(fetched_ms))
-    log_event(logging.INFO, source_event, trip_id=trip_id, reservation_id=reservation_id, age_seconds=age_ms // 1000, refresh_after=remaining)
+    """Return a cache row only while its provider data is still valid."""
+    live = payload.get("_guestLive") if isinstance(payload, dict) and isinstance(payload.get("_guestLive"), dict) else {}
+    api_fetched_at = live.get("apiFetchedAt")
+    if not api_fetched_at:
+        src = str(live.get("source") or "")
+        if "AeroDataBox" in src or payload.get("source") == "guest-live":
+            api_fetched_at = int(fetched_ms)
+    plan = _flight_runtime_plan(payload, int(api_fetched_at) if api_fetched_at else None)
+
+    # Once the live-data window is open, a row without an actual provider fetch
+    # cannot mask the first AeroDataBox lookup. Likewise, an expired provider TTL
+    # triggers a refresh even though the browser may be checking more frequently.
+    if plan["apiWindowOpen"] and plan["pollAfterSeconds"] > 0:
+        if not api_fetched_at:
+            _log_flight_plan("flight.cache_rejected", plan, trip_id, reservation_id,
+                             "no-provider-fetch", cache_source=source_event)
+            return None
+        if plan["apiRefreshAfterSeconds"] is not None and plan["apiRefreshAfterSeconds"] <= 0:
+            _log_flight_plan("flight.cache_rejected", plan, trip_id, reservation_id,
+                             "provider-ttl-expired", cache_source=source_event)
+            return None
+
+    out = _apply_flight_runtime_metadata(payload, int(fetched_ms), None)
+    out.setdefault("_guestLive", {}).setdefault("fetchedAt", int(fetched_ms))
+    plan = _flight_runtime_plan(out, int(out.get("_guestLive", {}).get("apiFetchedAt") or 0) or None)
+    _log_flight_plan(source_event, plan, trip_id, reservation_id, "serve-cache",
+                     cache_source=source_event, fetched_at=fetched_ms)
     return out
 
 
@@ -334,24 +509,30 @@ def upstream_get(path: str, incoming_host: str = "") -> tuple[int, list[tuple[st
         "X-Forwarded-Proto": "https",
         "X-Forwarded-Host": incoming_host or TREK_HOST,
     }
+    started = time.monotonic()
+    safe_target = _safe_request_target(path)
+    log_event(logging.DEBUG, "trek.upstream_start", method="GET", target=safe_target, host=TREK_HOST, port=TREK_PORT)
     try:
         conn.request("GET", path, headers=headers)
         res = conn.getresponse()
         body = res.read(MAX_JSON_BODY + 1)
         if len(body) > MAX_JSON_BODY:
             raise RuntimeError("TREK response too large")
+        log_event(logging.INFO if 200 <= res.status < 400 else logging.WARNING,
+                  "trek.upstream_response", target=safe_target, status=res.status,
+                  bytes=len(body), elapsed_ms=int((time.monotonic() - started) * 1000))
         return res.status, list(res.getheaders()), body
+    except Exception as exc:
+        log_event(logging.ERROR, "trek.upstream_failed", target=safe_target,
+                  error=str(exc), exc_type=type(exc).__name__,
+                  elapsed_ms=int((time.monotonic() - started) * 1000))
+        raise
     finally:
         conn.close()
 
 
 def upstream_read_prefix(path: str, limit: int, incoming_host: str = "") -> tuple[int, str, bytes]:
-    """Read only the first *limit* bytes of an upstream response.
-
-    Used for best-effort EXIF/XMP inspection of a photo already authorized by
-    TREK's public Journey share token. Closing the connection after the prefix
-    avoids downloading a full large original when metadata is near the start.
-    """
+    """Read only the first *limit* bytes of an upstream response."""
     conn = http.client.HTTPConnection(TREK_HOST, TREK_PORT, timeout=UPSTREAM_TIMEOUT)
     headers = {
         "Accept": "image/*,*/*;q=0.8",
@@ -360,12 +541,24 @@ def upstream_read_prefix(path: str, limit: int, incoming_host: str = "") -> tupl
         "X-Forwarded-Host": incoming_host or TREK_HOST,
         "Range": f"bytes=0-{max(0, limit - 1)}",
     }
+    started = time.monotonic()
+    safe_target = _safe_request_target(path)
+    log_event(logging.DEBUG, "trek.media_prefix_start", target=safe_target, limit=limit)
     try:
         conn.request("GET", path, headers=headers)
         res = conn.getresponse()
         body = res.read(limit)
         ctype = res.getheader("Content-Type", "")
+        log_event(logging.DEBUG if res.status in (200, 206) else logging.WARNING,
+                  "trek.media_prefix_response", target=safe_target, status=res.status,
+                  content_type=ctype or "unknown", bytes=len(body),
+                  elapsed_ms=int((time.monotonic() - started) * 1000))
         return res.status, ctype, body
+    except Exception as exc:
+        log_event(logging.WARNING, "trek.media_prefix_failed", target=safe_target,
+                  error=str(exc), exc_type=type(exc).__name__,
+                  elapsed_ms=int((time.monotonic() - started) * 1000))
+        raise
     finally:
         conn.close()
 
@@ -664,7 +857,11 @@ def get_shared_trip(token: str, incoming_host: str = "") -> dict:
 
 
 def get_shared_journey(token: str, incoming_host: str = "") -> dict:
+    started = time.monotonic()
     status, _headers, body = upstream_get(f"/api/public/journey/{quote(token, safe='')}", incoming_host)
+    log_event(logging.INFO if status == 200 else logging.WARNING, "trek.journey_fetch",
+              journey_share=_token_ref(token), status=status, bytes=len(body),
+              elapsed_ms=int((time.monotonic() - started) * 1000))
     if status != 200:
         raise LookupError(f"Journey share returned {status}")
     try:
@@ -701,6 +898,8 @@ def _session_cleanup(now: float | None = None) -> None:
         expired = [sid for sid, item in _sessions.items() if float(item.get("expires", 0)) <= now]
         for sid in expired:
             _sessions.pop(sid, None)
+        if expired and FULL_LOGGING:
+            log_event(logging.INFO, "session.cleanup", expired=len(expired), remaining=len(_sessions))
         if len(_sessions) > SESSION_MAX:
             remove_count = len(_sessions) - SESSION_MAX
             oldest = sorted(_sessions.items(), key=lambda kv: float(kv[1].get("created", 0)))[:remove_count]
@@ -717,6 +916,50 @@ def _session_rate_allowed() -> bool:
             return False
         _session_create_times.append(now)
         return True
+
+
+def _client_event_rate_allowed(session_ref: str) -> bool:
+    now = time.monotonic()
+    with _client_event_rate_lock:
+        cutoff = now - 60.0
+        bucket = [t for t in _client_event_times.get(session_ref, []) if t >= cutoff]
+        if len(bucket) >= CLIENT_EVENT_RATE_PER_MINUTE:
+            _client_event_times[session_ref] = bucket
+            return False
+        bucket.append(now)
+        _client_event_times[session_ref] = bucket
+        if len(_client_event_times) > SESSION_MAX * 2:
+            for key in list(_client_event_times)[: max(1, len(_client_event_times) // 4)]:
+                _client_event_times.pop(key, None)
+        return True
+
+
+_CLIENT_EVENT_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+_CLIENT_FIELD_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_.-]{0,47}$")
+_CLIENT_SENSITIVE_RE = re.compile(r"token|secret|password|passwd|api.?key|authorization|cookie|session|confirmation|email|phone", re.I)
+
+
+def _sanitize_client_fields(raw) -> dict:
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for key, value in list(raw.items())[:32]:
+        name = str(key)
+        if not _CLIENT_FIELD_RE.fullmatch(name) or _CLIENT_SENSITIVE_RE.search(name):
+            continue
+        if isinstance(value, bool) or value is None:
+            out[name] = value
+        elif isinstance(value, (int, float)):
+            out[name] = value
+        elif isinstance(value, str):
+            text = value.replace("\n", " ").replace("\r", " ")[:240]
+            # Never accept URL fragments from browser telemetry.
+            if "#" in text:
+                text = text.split("#", 1)[0]
+            out[name] = text
+        elif isinstance(value, (list, tuple)):
+            out[name] = ",".join(str(x)[:40] for x in list(value)[:8])[:240]
+    return out
 
 
 def _new_session(trip_token: str, journey_token: str, title: str, trip_id: str | None) -> tuple[str, dict]:
@@ -840,7 +1083,7 @@ def get_aerodatabox_key() -> tuple[str, str]:
 
     Hardened path: read a mounted secret via AERODATABOX_API_KEY_FILE.
     An explicitly-mounted Flight Tracker DB is accepted only as a compatibility
-    fallback; the recommended v1.0.2 deployment mounts no plugin data at runtime.
+    fallback; the recommended v1.0.4 deployment mounts no plugin data at runtime.
     """
     global _aero_key_cache
 
@@ -1191,6 +1434,7 @@ def _fetch_adsb(reg: str | None, callsign: str | None, number: str | None) -> di
     for path in paths:
         if path in seen: continue
         seen.add(path)
+        log_event(logging.INFO if FULL_LOGGING else logging.DEBUG, "adsb.request", lookup=path.split("/")[2] if len(path.split("/")) > 2 else "unknown")
         status, data, error = _json_url(ADSB_HOST + path, {"Accept":"application/json", "User-Agent":f"TREK-Guest-Portal/{VERSION}"}, ADSB_TIMEOUT)
         if 200 <= status < 300 and isinstance(data, dict) and isinstance(data.get("ac"), list) and data["ac"]:
             if isinstance(data["ac"][0], dict):
@@ -1229,22 +1473,165 @@ def _reservation_estimate(reservation: dict) -> tuple[int | None, int | None, st
     return dep_ms, arr_ms, dep_date
 
 
-def _flight_ttl_seconds(payload: dict) -> int:
+def _flight_api_ttl_seconds(payload: dict) -> int:
+    """Provider-cache TTL, matching Flight Tracker's current server curve.
+
+    This is deliberately separate from the browser polling interval. A guest may
+    check every minute while the server continues serving a still-fresh provider
+    result without spending another AeroDataBox request.
+    """
     booking = payload.get("booking") if isinstance(payload, dict) and isinstance(payload.get("booking"), dict) else {}
-    if booking.get("phase") == "past": return 0
+    if booking.get("phase") == "past":
+        return 0
     legs = payload.get("legs") if isinstance(payload, dict) and isinstance(payload.get("legs"), list) else []
     statuses = [str((l.get("status") or {}).get("status") or "") for l in legs if isinstance(l, dict)]
-    if statuses and all(s == "Arrived" for s in statuses): return 0
-    if any(s in {"EnRoute","Departed","Approaching","Boarding","Diverted"} for s in statuses): return 60
+    if statuses and all(s == "Arrived" for s in statuses):
+        return 0
+    if any(s in {"EnRoute", "Departed", "Approaching", "Boarding", "Diverted"} for s in statuses):
+        return 60
     dep = booking.get("depMs")
-    try: dep = int(dep) if dep is not None else None
-    except Exception: dep = None
-    if not dep: return 300
-    until = dep - int(time.time()*1000)
-    if until < 3*3600*1000: return 60
-    if until < 12*3600*1000: return 300
-    if until < 48*3600*1000: return 1800
+    try:
+        dep = int(dep) if dep is not None else None
+    except Exception:
+        dep = None
+    if not dep:
+        return 300
+    until = dep - int(time.time() * 1000)
+    if until < 3 * 3600 * 1000:
+        return 60
+    if until < 12 * 3600 * 1000:
+        return 300
+    if until < 48 * 3600 * 1000:
+        return 1800
     return 7200
+
+
+def _flight_ttl_seconds(payload: dict) -> int:
+    # Backward-compatible internal alias used by older cache helpers/tests.
+    return _flight_api_ttl_seconds(payload)
+
+
+def _payload_departure_ms(payload: dict | None) -> int | None:
+    if not isinstance(payload, dict):
+        return None
+    booking = payload.get("booking") if isinstance(payload.get("booking"), dict) else {}
+    try:
+        value = int(booking.get("depMs")) if booking.get("depMs") is not None else None
+        return value if value and value > 0 else None
+    except Exception:
+        return None
+
+
+def _flight_runtime_plan(payload: dict, fetched_ms: int | None = None) -> dict:
+    """Describe browser polling and provider-call timing independently."""
+    now_ms = int(time.time() * 1000)
+    booking = payload.get("booking") if isinstance(payload, dict) and isinstance(payload.get("booking"), dict) else {}
+    legs = payload.get("legs") if isinstance(payload, dict) and isinstance(payload.get("legs"), list) else []
+    statuses = [str((l.get("status") or {}).get("status") or "") for l in legs if isinstance(l, dict)]
+    all_arrived = bool(statuses) and all(s == "Arrived" for s in statuses)
+    moving = any(s in {"EnRoute", "Departed", "Approaching", "Boarding", "Diverted"} for s in statuses)
+    phase = str(booking.get("phase") or "unknown")
+    dep_ms = _payload_departure_ms(payload)
+    until_ms = None if dep_ms is None else dep_ms - now_ms
+    window_ms = int(FLIGHT_API_WINDOW_HOURS * 3600 * 1000)
+    past = phase == "past" or all_arrived
+    api_window_open = (not past) and (dep_ms is None or until_ms <= window_ms)
+
+    if past:
+        poll_seconds = 0
+        reason = "complete"
+    elif not api_window_open or phase == "upcoming":
+        poll_seconds = FLIGHT_UPCOMING_POLL_SECONDS
+        reason = "upcoming-check"
+    else:
+        poll_seconds = FLIGHT_ACTIVE_POLL_SECONDS
+        reason = "active-check"
+
+    api_ttl = _flight_api_ttl_seconds(payload)
+    age_seconds = None
+    if fetched_ms:
+        age_seconds = max(0, int((now_ms - int(fetched_ms)) / 1000))
+
+    if past:
+        api_due_seconds = None
+        api_window_opens_in = None
+    elif not api_window_open and until_ms is not None:
+        api_window_opens_in = max(0, int((until_ms - window_ms + 999) // 1000))
+        api_due_seconds = api_window_opens_in
+    else:
+        api_window_opens_in = 0
+        api_due_seconds = 0 if age_seconds is None else max(0, api_ttl - age_seconds)
+
+    return {
+        "phase": phase,
+        "depMs": dep_ms,
+        "untilDepartureSeconds": None if until_ms is None else int(until_ms / 1000),
+        "hoursToDeparture": None if until_ms is None else round(until_ms / 3600000.0, 2),
+        "estimatedTimes": bool(booking.get("estimatedTimes")),
+        "statuses": ",".join(s for s in statuses if s) or "none",
+        "moving": moving,
+        "allArrived": all_arrived,
+        "apiWindowOpen": api_window_open,
+        "apiWindowOpensInSeconds": api_window_opens_in,
+        "apiTtlSeconds": api_ttl,
+        "apiRefreshAfterSeconds": api_due_seconds,
+        "pollAfterSeconds": poll_seconds,
+        "reason": reason,
+        "cacheAgeSeconds": age_seconds,
+    }
+
+
+def _log_flight_plan(event: str, plan: dict, trip_id: str, reservation_id: str, decision: str, **extra) -> None:
+    log_event(
+        logging.INFO,
+        event,
+        trip_id=trip_id,
+        reservation_id=reservation_id,
+        decision=decision,
+        phase=plan.get("phase"),
+        hours_to_departure=plan.get("hoursToDeparture"),
+        estimated_times=plan.get("estimatedTimes"),
+        statuses=plan.get("statuses"),
+        api_window_open=plan.get("apiWindowOpen"),
+        api_window_opens_in=plan.get("apiWindowOpensInSeconds"),
+        api_ttl=plan.get("apiTtlSeconds"),
+        api_due_in=plan.get("apiRefreshAfterSeconds"),
+        poll_after=plan.get("pollAfterSeconds"),
+        cache_age=plan.get("cacheAgeSeconds"),
+        **extra,
+    )
+
+
+def _apply_flight_runtime_metadata(payload: dict, fetched_ms: int | None, source: str | None = None) -> dict:
+    out = json.loads(json.dumps(payload))
+    live = out.setdefault("_guestLive", {})
+    if source:
+        live["source"] = source
+    api_fetched_at = live.get("apiFetchedAt")
+    if not api_fetched_at:
+        # pre-v1.0.4 persistent rows did not have apiFetchedAt. Infer it only when
+        # the stored source clearly represents an AeroDataBox build.
+        src = str(live.get("source") or "")
+        if fetched_ms and ("AeroDataBox" in src or out.get("source") == "guest-live"):
+            api_fetched_at = int(fetched_ms)
+            live["apiFetchedAt"] = int(fetched_ms)
+    plan = _flight_runtime_plan(out, int(api_fetched_at) if api_fetched_at else None)
+    live.update({
+        "refreshAfterSeconds": plan["pollAfterSeconds"],
+        "pollAfterSeconds": plan["pollAfterSeconds"],
+        "apiWindowOpen": plan["apiWindowOpen"],
+        "apiWindowOpensInSeconds": plan["apiWindowOpensInSeconds"],
+        "apiTtlSeconds": plan["apiTtlSeconds"],
+        "apiRefreshAfterSeconds": plan["apiRefreshAfterSeconds"],
+        "refreshReason": plan["reason"],
+        "hoursToDeparture": plan["hoursToDeparture"],
+    })
+    if fetched_ms:
+        cache = out.setdefault("_guestCache", {})
+        cache["fetchedAt"] = int(fetched_ms)
+        cache["ageSeconds"] = max(0, int((time.time() * 1000 - int(fetched_ms)) / 1000))
+        cache["stale"] = False
+    return out
 
 
 def _live_lock(key: tuple[str, str]) -> threading.Lock:
@@ -1255,25 +1642,93 @@ def _live_lock(key: tuple[str, str]) -> threading.Lock:
         return lock
 
 
+def _build_upcoming_flight_payload(reservation: dict, reservation_id: str, trip_id: str, shared: dict, reference: dict | None) -> dict:
+    """Build a schedule-only payload without contacting AeroDataBox.
+
+    Flight Tracker does not query AeroDataBox for far-future flights. The browser
+    still checks periodically so it notices when the reservation enters the live
+    provider window.
+    """
+    now_ms = int(time.time() * 1000)
+    dep_ms, arr_ms, _base_date = _reservation_estimate(reservation)
+    ref_dep = _payload_departure_ms(reference)
+    if ref_dep:
+        dep_ms = ref_dep
+    if isinstance(reference, dict):
+        rb = reference.get("booking") if isinstance(reference.get("booking"), dict) else {}
+        try:
+            if rb.get("arrMs") is not None:
+                arr_ms = int(rb.get("arrMs"))
+        except Exception:
+            pass
+    legs = []
+    for leg in _reservation_legs(reservation, reference, reservation_id, shared):
+        leg = dict(leg)
+        leg.pop("_baseline", None)
+        leg.update({"status": None, "live": None, "inbound": None, "weather": None, "errors": []})
+        legs.append(leg)
+    payload = {
+        "applicable": True,
+        "source": "guest-scheduled",
+        "legs": legs,
+        "booking": {
+            "type": "Flight", "depMs": dep_ms, "arrMs": arr_ms, "phase": "upcoming",
+            "origin": legs[0].get("from") if legs else None,
+            "dest": legs[-1].get("to") if legs else None,
+            "legCount": len(legs), "estimatedTimes": not bool(ref_dep),
+        },
+        "errors": [],
+        "updatedAt": now_ms,
+        "_guestCache": {"fetchedAt": now_ms, "ageSeconds": 0, "stale": False},
+        "_guestLive": {
+            "configured": aerodatabox_configured(),
+            "source": "Scheduled data only — live provider window not open",
+            "apiFetchedAt": None,
+            "fetchedAt": now_ms,
+        },
+    }
+    payload = _apply_flight_runtime_metadata(payload, now_ms)
+    plan = _flight_runtime_plan(payload, None)
+    _log_flight_plan("flight.refresh_decision", plan, trip_id, reservation_id,
+                     "suppress-aerodatabox", reason="outside-live-window")
+    return payload
+
+
 def _build_live_flight_payload(reservation: dict, reservation_id: str, trip_id: str, shared: dict, baseline: dict | None) -> dict:
-    now_ms = int(time.time()*1000)
+    now_ms = int(time.time() * 1000)
     dep_ms, arr_ms, base_date = _reservation_estimate(reservation)
     phase = "active"
-    if dep_ms and now_ms < dep_ms - 48*3600*1000: phase = "upcoming"
-    elif arr_ms and now_ms > arr_ms + 6*3600*1000: phase = "past"
+    if dep_ms and now_ms < dep_ms - int(FLIGHT_API_WINDOW_HOURS * 3600 * 1000):
+        phase = "upcoming"
+    elif arr_ms and now_ms > arr_ms + 6 * 3600 * 1000:
+        phase = "past"
+
     legs_in = _reservation_legs(reservation, baseline, reservation_id, shared)
     legs_out = []
     errors = []
     for idx, leg in enumerate(legs_in):
         number = leg.get("number")
-        status = None; live = None; inbound = None
+        status = None
+        live = None
+        inbound = None
+        dep_date = leg.get("localDepDate") or base_date
+        log_event(logging.INFO, "flight.leg_refresh_plan", trip_id=trip_id,
+                  reservation_id=reservation_id, leg=idx + 1, flight=number or "unknown",
+                  departure_date=dep_date or "unknown", aerodatabox=bool(number),
+                  adsb_window="evaluate-after-status")
         if number:
-            status, aero_err = _fetch_aero(number, leg.get("localDepDate") or base_date)
-            if aero_err: errors.append(f"status: {aero_err}")
-            airborne = bool(status and status.get("status") in {"EnRoute","Departed","Approaching"})
-            close_window = not dep_ms or (now_ms >= dep_ms - 3600*1000 and (arr_ms is None or now_ms <= arr_ms + 2*3600*1000))
+            status, aero_err = _fetch_aero(number, dep_date)
+            if aero_err:
+                errors.append(f"status: {aero_err}")
+            airborne = bool(status and status.get("status") in {"EnRoute", "Departed", "Approaching"})
+            close_window = not dep_ms or (now_ms >= dep_ms - 3600 * 1000 and (arr_ms is None or now_ms <= arr_ms + 2 * 3600 * 1000))
+            log_event(logging.DEBUG, "flight.adsb_decision", trip_id=trip_id,
+                      reservation_id=reservation_id, leg=idx + 1, flight=number,
+                      airborne=airborne, close_window=close_window,
+                      request=bool(airborne or close_window))
             if airborne or close_window:
-                live = _fetch_adsb(status.get("aircraftReg") if status else None, status.get("callSign") if status else leg.get("callSign"), number)
+                live = _fetch_adsb(status.get("aircraftReg") if status else None,
+                                   status.get("callSign") if status else leg.get("callSign"), number)
             if status and status.get("aircraftReg") and not airborne and status.get("status") != "Arrived" and close_window and not live:
                 candidate = _fetch_adsb(status.get("aircraftReg"), None, None)
                 if candidate and candidate.get("lat") is not None and not candidate.get("onGround"):
@@ -1282,9 +1737,11 @@ def _build_live_flight_payload(reservation: dict, reservation_id: str, trip_id: 
             errors.append("flight number could not be detected")
         base_leg = leg.pop("_baseline", {})
         out = dict(leg)
-        out.update({"status": status, "live": live, "inbound": inbound, "weather": base_leg.get("weather"), "errors": []})
+        out.update({"status": status, "live": live, "inbound": inbound,
+                    "weather": base_leg.get("weather"), "errors": []})
         legs_out.append(out)
-    # authoritative AeroDataBox UTC times replace rough reservation estimates
+
+    # Authoritative AeroDataBox UTC times replace rough reservation estimates.
     if legs_out:
         first = legs_out[0].get("status") or {}
         dep_block = first.get("departure") if isinstance(first.get("departure"), dict) else {}
@@ -1292,31 +1749,43 @@ def _build_live_flight_payload(reservation: dict, reservation_id: str, trip_id: 
         last_status = legs_out[-1].get("status") or {}
         arr_block = last_status.get("arrival") if isinstance(last_status.get("arrival"), dict) else {}
         last_utc = _iso_ms(arr_block.get("revisedUtc") or arr_block.get("scheduledUtc"))
-        if first_utc is not None: dep_ms = first_utc
-        if last_utc is not None: arr_ms = last_utc
-        if dep_ms and now_ms < dep_ms - 48*3600*1000: phase = "upcoming"
-        elif arr_ms and now_ms > arr_ms + 6*3600*1000: phase = "past"
-        else: phase = "active"
+        if first_utc is not None:
+            dep_ms = first_utc
+        if last_utc is not None:
+            arr_ms = last_utc
+        if dep_ms and now_ms < dep_ms - int(FLIGHT_API_WINDOW_HOURS * 3600 * 1000):
+            phase = "upcoming"
+        elif arr_ms and now_ms > arr_ms + 6 * 3600 * 1000:
+            phase = "past"
+        else:
+            phase = "active"
+
     payload = {
-        "applicable": True, "source": "guest-live", "legs": legs_out,
-        "booking": {"type":"Flight", "depMs":dep_ms, "arrMs":arr_ms, "phase":phase,
-                    "origin": legs_out[0].get("from") if legs_out else None,
-                    "dest": legs_out[-1].get("to") if legs_out else None,
-                    "legCount": len(legs_out), "estimatedTimes": not any((l.get("status") or {}).get("departure",{}).get("scheduledUtc") for l in legs_out)},
-        "errors": list(dict.fromkeys(errors))[:4], "updatedAt": now_ms,
+        "applicable": True,
+        "source": "guest-live",
+        "legs": legs_out,
+        "booking": {
+            "type": "Flight", "depMs": dep_ms, "arrMs": arr_ms, "phase": phase,
+            "origin": legs_out[0].get("from") if legs_out else None,
+            "dest": legs_out[-1].get("to") if legs_out else None,
+            "legCount": len(legs_out),
+            "estimatedTimes": not any((l.get("status") or {}).get("departure", {}).get("scheduledUtc") for l in legs_out),
+        },
+        "errors": list(dict.fromkeys(errors))[:4],
+        "updatedAt": now_ms,
+        "_guestCache": {"fetchedAt": now_ms, "ageSeconds": 0, "stale": False},
+        "_guestLive": {
+            "configured": True,
+            "source": "AeroDataBox + adsb.fi",
+            "apiFetchedAt": now_ms,
+            "fetchedAt": now_ms,
+        },
     }
-    ttl = _flight_ttl_seconds(payload)
-    payload["_guestCache"] = {"fetchedAt": now_ms, "ageSeconds": 0, "stale": False}
-    payload["_guestLive"] = {"configured": True, "source": "AeroDataBox + adsb.fi", "ttlSeconds": ttl, "refreshAfterSeconds": ttl, "fetchedAt": now_ms}
-    return payload
+    return _apply_flight_runtime_metadata(payload, now_ms)
 
 
 def _fresh_tracker_baseline(baseline: dict | None, trip_id: str, reservation_id: str) -> dict | None:
-    """Reuse Flight Tracker's cache while it is still inside the same TTL curve.
-
-    This avoids a duplicate AeroDataBox request when the installed tracker has
-    already refreshed the flight recently.
-    """
+    """Reuse Flight Tracker's cache while its provider TTL remains valid."""
     if not isinstance(baseline, dict):
         return None
     cache = baseline.get("_guestCache") if isinstance(baseline.get("_guestCache"), dict) else {}
@@ -1326,115 +1795,154 @@ def _fresh_tracker_baseline(baseline: dict | None, trip_id: str, reservation_id:
         fetched_ms = 0
     if not fetched_ms:
         return None
-    now_ms = int(time.time() * 1000)
-    age_ms = max(0, now_ms - fetched_ms)
-    ttl = _flight_ttl_seconds(baseline)
-    if ttl != 0 and age_ms >= ttl * 1000:
+    plan = _flight_runtime_plan(baseline, fetched_ms)
+    if plan["apiWindowOpen"] and plan["apiRefreshAfterSeconds"] is not None and plan["apiRefreshAfterSeconds"] <= 0:
+        _log_flight_plan("flight.tracker_cache_rejected", plan, trip_id, reservation_id,
+                         "provider-ttl-expired")
         return None
 
-    out = json.loads(json.dumps(baseline))
-    remaining = 0 if ttl == 0 else max(15, int((ttl * 1000 - age_ms + 999) // 1000))
-    out.setdefault("_guestCache", {})["ageSeconds"] = age_ms // 1000
-    out["_guestCache"]["fetchedAt"] = fetched_ms
-    out["_guestCache"]["stale"] = False
-    out["_guestLive"] = {
-        "configured": True,
-        "source": "Flight Tracker cache (fresh)",
-        "ttlSeconds": ttl,
-        "refreshAfterSeconds": remaining,
-        "fetchedAt": fetched_ms,
-    }
-    log_event(logging.INFO, "flight.tracker_cache_reused", trip_id=trip_id, reservation_id=reservation_id, age_seconds=age_ms // 1000, refresh_after=remaining)
+    baseline_copy = json.loads(json.dumps(baseline))
+    baseline_copy.setdefault("_guestLive", {})["apiFetchedAt"] = fetched_ms
+    out = _apply_flight_runtime_metadata(baseline_copy, fetched_ms, "Flight Tracker cache (fresh)")
+    plan = _flight_runtime_plan(out, fetched_ms)
+    _log_flight_plan("flight.tracker_cache_reused", plan, trip_id, reservation_id,
+                     "serve-cache", cache_source="flight-tracker")
     return out
+
+
+def _reference_departure_ms(reservation: dict, *payloads: dict | None) -> int | None:
+    for payload in payloads:
+        dep = _payload_departure_ms(payload)
+        if dep:
+            return dep
+    dep_ms, _arr_ms, _date = _reservation_estimate(reservation)
+    return dep_ms
 
 
 def get_live_flight_payload(reservation: dict, reservation_id: str, trip_id: str, shared: dict, baseline: dict | None) -> dict | None:
     key = (str(trip_id), str(reservation_id))
-    now_ms = int(time.time()*1000)
+    now_ms = int(time.time() * 1000)
 
-    # Persistent Guest Portal cache is usable even if AeroDataBox is currently
-    # unavailable or its key cannot be discovered after a restart.
+    # Read persistent state early because an older provider result may contain a
+    # more authoritative UTC departure than TREK's timezone-less reservation.
     persisted = read_persistent_live_cache(str(trip_id), str(reservation_id))
-    if persisted:
-        fetched_ms, persisted_payload = persisted
-        out = _decorate_cached_payload(fetched_ms, persisted_payload, str(trip_id), str(reservation_id), "flight.persistent_cache_hit")
-        if out is not None:
-            with _live_flight_cache_lock:
-                _live_flight_cache[key] = (fetched_ms, persisted_payload)
-            return out
+    persisted_fetched = persisted[0] if persisted else None
+    persisted_payload = persisted[1] if persisted else None
+    dep_ref = _reference_departure_ms(reservation, persisted_payload, baseline)
+    window_ms = int(FLIGHT_API_WINDOW_HOURS * 3600 * 1000)
+    if dep_ref is not None and now_ms < dep_ref - window_ms:
+        reference = persisted_payload if isinstance(persisted_payload, dict) else baseline
+        return _build_upcoming_flight_payload(reservation, reservation_id, str(trip_id), shared, reference)
 
-    if not aerodatabox_configured():
-        if baseline is None: return None
-        payload = json.loads(json.dumps(baseline))
-        ttl = _flight_ttl_seconds(payload)
-        payload["_guestLive"] = {"configured": False, "source": "Flight Tracker cache", "ttlSeconds": ttl, "refreshAfterSeconds": min(ttl or 300, 300)}
-        return payload
+    # Memory cache first for hot requests, then persistent cache for restart-safe
+    # reuse. The browser may check every minute; provider TTL determines whether
+    # those checks result in an external API request.
     with _live_flight_cache_lock:
         cached = _live_flight_cache.get(key)
-        if cached:
-            fetched_ms, payload = cached
-            ttl = _flight_ttl_seconds(payload)
-            age_ms = max(0, now_ms - fetched_ms)
-            if ttl == 0 or age_ms < ttl*1000:
-                out = json.loads(json.dumps(payload))
-                remaining = 0 if ttl == 0 else max(15, int((ttl*1000 - age_ms + 999)//1000))
-                out.setdefault("_guestCache", {})["ageSeconds"] = age_ms//1000
-                out["_guestCache"]["fetchedAt"] = fetched_ms
-                out["_guestLive"]["refreshAfterSeconds"] = remaining
-                log_event(logging.INFO, "flight.live_cache_hit", trip_id=trip_id, reservation_id=reservation_id, age_seconds=age_ms//1000, refresh_after=remaining)
-                return out
+    if cached:
+        fetched_ms, cached_payload = cached
+        out = _decorate_cached_payload(fetched_ms, cached_payload, str(trip_id), str(reservation_id), "flight.memory_cache_hit")
+        if out is not None:
+            return out
+
+    if persisted:
+        out = _decorate_cached_payload(persisted_fetched, persisted_payload, str(trip_id), str(reservation_id), "flight.persistent_cache_hit")
+        if out is not None:
+            with _live_flight_cache_lock:
+                _live_flight_cache[key] = (persisted_fetched, persisted_payload)
+            return out
 
     tracker_fresh = _fresh_tracker_baseline(baseline, trip_id, reservation_id)
     if tracker_fresh is not None:
         return tracker_fresh
 
+    if not aerodatabox_configured():
+        if baseline is None:
+            log_event(logging.WARNING, "flight.refresh_decision", trip_id=trip_id,
+                      reservation_id=reservation_id, decision="no-provider-key")
+            return None
+        payload = _apply_flight_runtime_metadata(baseline,
+                  int((baseline.get("_guestCache") or {}).get("fetchedAt") or now_ms),
+                  "Flight Tracker cache")
+        payload.setdefault("_guestLive", {})["configured"] = False
+        payload["_guestLive"]["refreshAfterSeconds"] = FLIGHT_ERROR_POLL_SECONDS
+        payload["_guestLive"]["pollAfterSeconds"] = FLIGHT_ERROR_POLL_SECONDS
+        return payload
+
     lock = _live_lock(key)
     with lock:
-        now_ms = int(time.time()*1000)
+        # Another request may have refreshed the row while this request waited.
+        now_ms = int(time.time() * 1000)
         with _live_flight_cache_lock:
             cached = _live_flight_cache.get(key)
-            if cached:
-                fetched_ms, payload = cached
-                ttl = _flight_ttl_seconds(payload); age_ms = max(0, now_ms-fetched_ms)
-                if ttl == 0 or age_ms < ttl*1000:
-                    out = json.loads(json.dumps(payload)); remaining = 0 if ttl == 0 else max(15,int((ttl*1000-age_ms+999)//1000))
-                    out.setdefault("_guestCache", {})["ageSeconds"] = age_ms//1000; out["_guestCache"]["fetchedAt"] = fetched_ms
-                    out["_guestLive"]["refreshAfterSeconds"] = remaining
-                    log_event(logging.INFO, "flight.live_cache_hit", trip_id=trip_id, reservation_id=reservation_id, age_seconds=age_ms//1000, refresh_after=remaining)
-                    return out
-        persisted = read_persistent_live_cache(str(trip_id), str(reservation_id))
-        if persisted:
-            fetched_ms, persisted_payload = persisted
-            out = _decorate_cached_payload(fetched_ms, persisted_payload, str(trip_id), str(reservation_id), "flight.persistent_cache_hit")
+        if cached:
+            fetched_ms, cached_payload = cached
+            out = _decorate_cached_payload(fetched_ms, cached_payload, str(trip_id), str(reservation_id), "flight.memory_cache_hit_after_lock")
+            if out is not None:
+                return out
+
+        persisted2 = read_persistent_live_cache(str(trip_id), str(reservation_id))
+        if persisted2:
+            fetched_ms, cached_payload = persisted2
+            out = _decorate_cached_payload(fetched_ms, cached_payload, str(trip_id), str(reservation_id), "flight.persistent_cache_hit_after_lock")
             if out is not None:
                 with _live_flight_cache_lock:
-                    _live_flight_cache[key] = (fetched_ms, persisted_payload)
+                    _live_flight_cache[key] = (fetched_ms, cached_payload)
                 return out
+
         tracker_fresh = _fresh_tracker_baseline(baseline, trip_id, reservation_id)
         if tracker_fresh is not None:
             return tracker_fresh
+
+        dep_ref = _reference_departure_ms(reservation, persisted2[1] if persisted2 else None, baseline)
+        if dep_ref is not None and now_ms < dep_ref - window_ms:
+            return _build_upcoming_flight_payload(reservation, reservation_id, str(trip_id), shared,
+                                                  persisted2[1] if persisted2 else baseline)
+
+        preview = {
+            "booking": {"depMs": dep_ref, "phase": "active", "estimatedTimes": True},
+            "legs": [],
+        }
+        plan = _flight_runtime_plan(preview, None)
+        _log_flight_plan("flight.refresh_decision", plan, trip_id, reservation_id,
+                         "call-aerodatabox", key_source=aerodatabox_key_source())
         try:
-            log_event(logging.INFO, "flight.live_refresh_start", trip_id=trip_id, reservation_id=reservation_id, baseline=bool(baseline), key_source=aerodatabox_key_source())
+            log_event(logging.INFO, "flight.live_refresh_start", trip_id=trip_id,
+                      reservation_id=reservation_id, baseline=bool(baseline),
+                      key_source=aerodatabox_key_source())
             started = time.monotonic()
             payload = _build_live_flight_payload(reservation, reservation_id, str(trip_id), shared, baseline)
-            log_event(logging.INFO, "flight.live_refresh_complete", trip_id=trip_id, reservation_id=reservation_id, legs=len(payload.get("legs") or []), ttl_seconds=_flight_ttl_seconds(payload), errors=len(payload.get("errors") or []), elapsed_ms=int((time.monotonic()-started)*1000))
+            post_plan = _flight_runtime_plan(payload, int(payload.get("_guestLive", {}).get("apiFetchedAt") or now_ms))
+            _log_flight_plan("flight.live_refresh_complete", post_plan, trip_id, reservation_id,
+                             "provider-refresh-complete", legs=len(payload.get("legs") or []),
+                             errors=len(payload.get("errors") or []),
+                             elapsed_ms=int((time.monotonic() - started) * 1000))
         except Exception as exc:
-            log_event(logging.ERROR, "flight.live_refresh_failed", trip_id=trip_id, reservation_id=reservation_id, error=str(exc))
+            log_event(logging.ERROR, "flight.live_refresh_failed", trip_id=trip_id,
+                      reservation_id=reservation_id, error=str(exc), exc_type=type(exc).__name__)
             if baseline is not None:
                 payload = json.loads(json.dumps(baseline))
                 payload.setdefault("errors", []).append(f"guest live refresh failed: {exc}")
-                payload["_guestLive"] = {"configured": True, "source":"Flight Tracker cache fallback", "ttlSeconds":300, "refreshAfterSeconds":300, "error":str(exc)}
-                log_event(logging.WARNING, "flight.cache_fallback", trip_id=trip_id, reservation_id=reservation_id)
+                payload = _apply_flight_runtime_metadata(payload,
+                          int((baseline.get("_guestCache") or {}).get("fetchedAt") or now_ms),
+                          "Flight Tracker cache fallback")
+                payload.setdefault("_guestLive", {})["refreshAfterSeconds"] = FLIGHT_ERROR_POLL_SECONDS
+                payload["_guestLive"]["pollAfterSeconds"] = FLIGHT_ERROR_POLL_SECONDS
+                log_event(logging.WARNING, "flight.cache_fallback", trip_id=trip_id,
+                          reservation_id=reservation_id, retry_after=FLIGHT_ERROR_POLL_SECONDS)
                 return payload
             raise
+
         with _live_flight_cache_lock:
             if len(_live_flight_cache) >= LIVE_FLIGHT_MAX_CACHE:
                 oldest = min(_live_flight_cache.items(), key=lambda kv: kv[1][0])[0]
                 _live_flight_cache.pop(oldest, None)
-            fetched_at = int(payload.get("updatedAt") or now_ms)
+                log_event(logging.DEBUG, "flight.memory_cache_evict", key=f"{oldest[0]}:{oldest[1]}")
+            fetched_at = int(payload.get("_guestLive", {}).get("apiFetchedAt") or payload.get("updatedAt") or now_ms)
             _live_flight_cache[key] = (fetched_at, payload)
         write_persistent_live_cache(str(trip_id), str(reservation_id), fetched_at, payload)
         return json.loads(json.dumps(payload))
+
 
 def reservation_kind(item: dict) -> str:
     for key in ("type", "reservation_type", "category"):
@@ -1453,14 +1961,20 @@ class Handler(BaseHTTPRequestHandler):
         return "GuestPortal"
 
     def log_message(self, fmt, *args):
-        log_event(logging.DEBUG, "http.internal", client=self.client_address[0], message=fmt % args)
+        # BaseHTTPRequestHandler's default logger sees only the reverse proxy.
+        # Correlated request context already contains the safely resolved client.
+        log_event(logging.DEBUG, "http.internal", message=fmt % args)
 
     def log_request(self, code="-", size="-"):
+        _metric("http_responses")
         path = urlsplit(self.path).path
         level = logging.INFO if path.startswith("/api/") else logging.DEBUG
         started = getattr(self, "_request_started", None)
         elapsed = int((time.monotonic() - started) * 1000) if started else None
-        log_event(level, "http.request", client=self.client_address[0], method=self.command, target=_safe_request_target(self.path), status=code, bytes=size, elapsed_ms=elapsed)
+        fields = {"method": self.command, "target": _safe_request_target(self.path),
+                  "status": code, "bytes": size, "elapsed_ms": elapsed}
+        # Do not overwrite the request-context client field with the proxy socket.
+        log_event(level, "http.response", **fields)
 
     def _security_headers(self):
         csp = (
@@ -1491,6 +2005,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        request_id = getattr(self, "_request_id", None)
+        if request_id:
+            self.send_header("X-Guest-Request-ID", request_id)
         if extra_headers:
             for key, value in extra_headers.items():
                 self.send_header(key, value)
@@ -1505,12 +2022,12 @@ class Handler(BaseHTTPRequestHandler):
     def _clear_session_cookie(self) -> str:
         return f"{SESSION_COOKIE_NAME}=; Path={COOKIE_PATH}; Max-Age=0; HttpOnly; Secure; SameSite=Strict"
 
-    def _read_json_body(self) -> dict | None:
+    def _read_json_body(self, max_length: int = MAX_SESSION_BODY) -> dict | None:
         try:
             length = int(self.headers.get("Content-Length", ""))
         except Exception:
             return None
-        if length <= 0 or length > MAX_SESSION_BODY:
+        if length <= 0 or length > max_length:
             return None
         ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
         if ctype != "application/json":
@@ -1525,8 +2042,12 @@ class Handler(BaseHTTPRequestHandler):
     def _require_session(self) -> tuple[str, dict] | None:
         sid, item = _session_from_cookie(self.headers.get("Cookie"))
         if not sid or not item:
+            log_event(logging.WARNING, "session.auth_failed", reason="missing-or-expired")
             self._send_json(401, {"error": "Guest session required"})
             return None
+        if FULL_LOGGING:
+            now = time.time()
+            log_event(logging.INFO, "session.auth_ok", session=_token_ref(sid), trip_id=item.get("trip_id") or "unknown", age_seconds=max(0, int(now-float(item.get("created", now)))), expires_in=max(0, int(float(item.get("expires", now))-now)), has_journey=bool(item.get("journey")))
         return sid, item
 
     def _serve_static(self, request_path: str):
@@ -1537,9 +2058,12 @@ class Handler(BaseHTTPRequestHandler):
             candidate.relative_to(PUBLIC_ROOT)
         except ValueError:
             return self._send_json(403, {"error": "Forbidden"})
+        fallback = False
         if not candidate.is_file():
             candidate = PUBLIC_ROOT / "index.html"
+            fallback = True
             if not candidate.is_file():
+                log_event(logging.WARNING, "static.not_found", requested=raw)
                 return self._send_json(404, {"error": "Not found"})
         ctype, _ = mimetypes.guess_type(str(candidate))
         ctype = ctype or "application/octet-stream"
@@ -1548,6 +2072,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if ctype.startswith("text/") or ctype in ("application/javascript", "application/json") else ""))
         self.send_header("Content-Length", str(size))
         self.send_header("Cache-Control", "no-store" if candidate.name in {"index.html", "config.js", "app.js", "style.css"} else "public, max-age=3600")
+        request_id = getattr(self, "_request_id", None)
+        if request_id:
+            self.send_header("X-Guest-Request-ID", request_id)
+        if LOG_STATIC_REQUESTS:
+            log_event(logging.INFO if FULL_LOGGING else logging.DEBUG, "static.serve", requested=raw or "/", served=candidate.name, fallback=fallback, content_type=ctype, bytes=size)
         self._security_headers()
         self.end_headers()
         if self.command != "HEAD":
@@ -1575,22 +2104,36 @@ class Handler(BaseHTTPRequestHandler):
             if value:
                 headers[key] = value
         try:
+            started = time.monotonic()
+            log_event(logging.INFO, "trek.media_proxy_start", photo_id=photo_id, variant=variant)
             conn.request("GET", target, headers=headers)
             res = conn.getresponse()
+            log_event(logging.INFO if 200 <= res.status < 400 else logging.WARNING,
+                      "trek.media_proxy_response", photo_id=photo_id, variant=variant,
+                      status=res.status, content_type=res.getheader("Content-Type", "unknown"),
+                      content_length=res.getheader("Content-Length", "unknown"),
+                      elapsed_ms=int((time.monotonic() - started) * 1000))
             self.send_response(res.status)
             allowed = {"content-type", "content-length", "content-range", "accept-ranges", "etag", "last-modified"}
             for key, value in res.getheaders():
                 if key.lower() in allowed:
                     self.send_header(key, value)
             self.send_header("Cache-Control", "no-store")
+            request_id = getattr(self, "_request_id", None)
+            if request_id:
+                self.send_header("X-Guest-Request-ID", request_id)
             self._security_headers()
             self.end_headers()
+            sent = 0
             if self.command != "HEAD":
                 while True:
                     chunk = res.read(64 * 1024)
                     if not chunk:
                         break
+                    sent += len(chunk)
                     self.wfile.write(chunk)
+            if FULL_LOGGING:
+                log_event(logging.INFO, "trek.media_proxy_complete", photo_id=photo_id, variant=variant, bytes_sent=sent, status=res.status)
         except Exception as exc:
             log_event(logging.ERROR, "trek.media_proxy_failed", photo_id=photo_id, variant=variant, error=str(exc))
             try:
@@ -1600,11 +2143,38 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+    def _client_log(self, sid: str, session: dict):
+        if not CLIENT_EVENT_LOGGING:
+            return self._send_json(200, {"ok": True, "logging": False})
+        if not _origin_allowed(self.headers.get("Origin")):
+            log_event(logging.WARNING, "client.event_rejected", reason="origin")
+            return self._send_json(403, {"error": "Invalid request origin"})
+        session_ref = _token_ref(sid)
+        if not _client_event_rate_allowed(session_ref):
+            log_event(logging.WARNING, "client.event_rate_limited", session=session_ref, limit_per_minute=CLIENT_EVENT_RATE_PER_MINUTE)
+            return self._send_json(429, {"error": "Client logging rate limit exceeded"}, {"Retry-After": "60"})
+        body = self._read_json_body(CLIENT_EVENT_MAX_BODY)
+        if not body:
+            log_event(logging.WARNING, "client.event_rejected", reason="invalid-body", session=session_ref)
+            return self._send_json(400, {"error": "Invalid client log event"})
+        name = str(body.get("event") or "").strip().lower()
+        if not _CLIENT_EVENT_RE.fullmatch(name):
+            log_event(logging.WARNING, "client.event_rejected", reason="invalid-name", session=session_ref)
+            return self._send_json(400, {"error": "Invalid client log event"})
+        level_name = str(body.get("level") or "info").strip().lower()
+        level = {"debug": logging.DEBUG, "info": logging.INFO, "warn": logging.WARNING, "warning": logging.WARNING, "error": logging.ERROR}.get(level_name, logging.INFO)
+        fields = _sanitize_client_fields(body.get("fields"))
+        _metric("client_events")
+        log_event(level, "client.event", name=name, session=session_ref, trip_id=session.get("trip_id") or "unknown", **{f"ui_{k}": v for k,v in fields.items()})
+        return self._send_json(200, {"ok": True})
+
     def _create_guest_session(self):
+        log_event(logging.INFO, "session.create_attempt", origin=self.headers.get("Origin") or "missing")
         if not _origin_allowed(self.headers.get("Origin")):
             log_event(logging.WARNING, "session.origin_rejected", origin=self.headers.get("Origin") or "missing")
             return self._send_json(403, {"error": "Invalid request origin"})
         if not _session_rate_allowed():
+            log_event(logging.WARNING, "session.rate_limited", limit_per_minute=SESSION_CREATE_PER_MINUTE)
             return self._send_json(429, {"error": "Too many session requests"}, {"Retry-After": "60"})
         body = self._read_json_body()
         if body is None:
@@ -1633,6 +2203,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(502, {"error": "Unable to validate Journey share"})
         trip = shared.get("trip") or {}
         sid, _item = _new_session(trip_token, journey_token, title, trip.get("id"))
+        _metric("sessions_created")
         log_event(logging.INFO, "session.created", session=_token_ref(sid), trip_share=_token_ref(trip_token), journey=bool(journey_token), expires_in=SESSION_TTL_SECONDS)
         return self._send_json(200, {"ok": True, "hasJourney": bool(journey_token)}, {"Set-Cookie": self._set_session_cookie(sid)})
 
@@ -1646,24 +2217,39 @@ class Handler(BaseHTTPRequestHandler):
 
     def _trip_json(self, session: dict):
         token = str(session.get("trip") or "")
+        started = time.monotonic()
+        log_event(logging.INFO, "trip.read_start", trip_share=_token_ref(token))
         try:
-            return self._send_json(200, get_shared_trip(token, _upstream_host_header()))
+            data = get_shared_trip(token, _upstream_host_header())
+            log_event(logging.INFO, "trip.read_complete", trip_share=_token_ref(token),
+                      trip_id=(data.get("trip") or {}).get("id"), days=len(data.get("days") or []),
+                      reservations=len(data.get("reservations") or []), accommodations=len(data.get("accommodations") or []),
+                      elapsed_ms=int((time.monotonic() - started) * 1000))
+            return self._send_json(200, data)
         except LookupError:
+            log_event(logging.WARNING, "trip.read_invalid", trip_share=_token_ref(token))
             return self._send_json(404, {"error": "Trip share link is invalid or expired"})
         except Exception as exc:
-            log_event(logging.ERROR, "trip.read_failed", trip_share=_token_ref(token), error=str(exc))
+            log_event(logging.ERROR, "trip.read_failed", trip_share=_token_ref(token), error=str(exc), exc_type=type(exc).__name__)
             return self._send_json(502, {"error": "Trip data unavailable"})
 
     def _journey_json(self, session: dict):
         token = str(session.get("journey") or "")
         if not token:
             return self._send_json(404, {"error": "No Journey share is configured"})
+        started = time.monotonic()
+        log_event(logging.INFO, "journey.read_start", journey_share=_token_ref(token))
         try:
-            return self._send_json(200, get_shared_journey(token, _upstream_host_header()))
+            data = get_shared_journey(token, _upstream_host_header())
+            log_event(logging.INFO, "journey.read_complete", journey_share=_token_ref(token),
+                      gallery=len(data.get("gallery") or []), entries=len(data.get("entries") or []),
+                      elapsed_ms=int((time.monotonic() - started) * 1000))
+            return self._send_json(200, data)
         except LookupError:
+            log_event(logging.WARNING, "journey.read_invalid", journey_share=_token_ref(token))
             return self._send_json(404, {"error": "Journey share link is invalid or expired"})
         except Exception as exc:
-            log_event(logging.ERROR, "journey.read_failed", journey_share=_token_ref(token), error=str(exc))
+            log_event(logging.ERROR, "journey.read_failed", journey_share=_token_ref(token), error=str(exc), exc_type=type(exc).__name__)
             return self._send_json(502, {"error": "Journey data unavailable"})
 
     def _flight_status(self, reservation_id: str, session: dict):
@@ -1705,14 +2291,20 @@ class Handler(BaseHTTPRequestHandler):
             payload["_guestLive"].pop("error", None)
         if isinstance(payload.get("errors"), list):
             payload["errors"] = ["Some live flight details could not be refreshed"] if payload["errors"] else []
-        log_event(logging.INFO, "flight.response", reservation_id=reservation_id, trip_id=trip_id, source=(payload.get("_guestLive") or {}).get("source"), refresh_after=(payload.get("_guestLive") or {}).get("refreshAfterSeconds"))
+        live_meta = payload.get("_guestLive") if isinstance(payload.get("_guestLive"), dict) else {}
+        plan = _flight_runtime_plan(payload, int(live_meta.get("apiFetchedAt") or 0) or None)
+        _log_flight_plan("flight.response", plan, str(trip_id), reservation_id, "respond",
+                         source=live_meta.get("source"), configured=live_meta.get("configured"),
+                         browser_refresh_after=live_meta.get("refreshAfterSeconds"),
+                         api_refresh_after=live_meta.get("apiRefreshAfterSeconds"))
         return self._send_json(200, payload)
 
     def _photo_dates(self, session: dict):
         token = str(session.get("journey") or "")
         if not token:
             return self._send_json(404, {"error": "No Journey share is configured"})
-        log_event(logging.INFO, "photos.date_request", journey_share=_token_ref(token))
+        photo_started = time.monotonic()
+        log_event(logging.INFO, "photos.date_request", journey_share=_token_ref(token), immich_configured=immich_configured())
         try:
             journey = get_shared_journey(token, _upstream_host_header())
         except LookupError:
@@ -1742,8 +2334,12 @@ class Handler(BaseHTTPRequestHandler):
             })
         dates: dict[str, str] = {}
         immich_checked = immich_resolved = fallback_checked = 0
+        parent_log_context = dict(getattr(_log_context, "fields", None) or {})
 
         def resolve(item: dict[str, str]) -> tuple[str, str | None, str]:
+            # ThreadPoolExecutor workers do not inherit thread-local request
+            # context automatically; copy the correlation id for coherent logs.
+            _log_context.fields = dict(parent_log_context)
             pid = item["photo_id"]
             if item["provider"] == "immich" and item["asset_id"] and immich_configured():
                 value = get_immich_asset_capture_date(item["asset_id"])
@@ -1770,7 +2366,7 @@ class Handler(BaseHTTPRequestHandler):
                         fallback_checked += 1
                     if value:
                         dates[pid] = value
-        log_event(logging.INFO, "photos.date_response", journey_share=_token_ref(token), checked=len(targets), resolved=len(dates), immich_checked=immich_checked, immich_resolved=immich_resolved, fallback_checked=fallback_checked)
+        log_event(logging.INFO, "photos.date_response", journey_share=_token_ref(token), checked=len(targets), resolved=len(dates), immich_checked=immich_checked, immich_resolved=immich_resolved, fallback_checked=fallback_checked, unresolved=max(0, len(targets)-len(dates)), elapsed_ms=int((time.monotonic()-photo_started)*1000))
         return self._send_json(200, {"dates": dates})
 
     def do_HEAD(self):
@@ -1780,7 +2376,7 @@ class Handler(BaseHTTPRequestHandler):
         self._dispatch_get()
 
     def do_POST(self):
-        self._request_started = time.monotonic()
+        _begin_log_context(self, self.path)
         path = urlsplit(self.path).path
         if path == "/api/session":
             return self._create_guest_session()
@@ -1788,13 +2384,21 @@ class Handler(BaseHTTPRequestHandler):
             if not _origin_allowed(self.headers.get("Origin")):
                 return self._send_json(403, {"error": "Invalid request origin"})
             return self._logout()
+        if path == "/api/client-log":
+            auth = self._require_session()
+            if auth is None:
+                return
+            sid, session = auth
+            return self._client_log(sid, session)
+        log_event(logging.WARNING, "http.route_not_found", method=self.command, target=_safe_request_target(self.path))
         return self._send_json(404, {"error": "Not found"})
 
     def do_OPTIONS(self):
+        _begin_log_context(self, self.path)
         self._send_json(405, {"error": "Method not allowed"}, {"Allow": "GET, HEAD, POST"})
 
     def _dispatch_get(self):
-        self._request_started = time.monotonic()
+        _begin_log_context(self, self.path)
         path = urlsplit(self.path).path
         if path == "/health":
             return self._send_json(200, {"ok": True, "version": VERSION})
@@ -1814,8 +2418,56 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/photos/([A-Za-z0-9_-]{1,64})/(thumbnail|original)", path)
             if m:
                 return self._proxy_journey_media(m.group(1), m.group(2), session)
+            log_event(logging.WARNING, "http.route_not_found", method=self.command, target=_safe_request_target(self.path))
             return self._send_json(404, {"error": "Not found"})
         return self._serve_static(path)
+
+
+def _persistent_cache_stats() -> tuple[int | str, int | str]:
+    if not _guest_cache_ready:
+        return "unavailable", "unavailable"
+    try:
+        with _guest_cache_lock, sqlite3.connect(GUEST_CACHE_DB, timeout=2) as con:
+            rows = int(con.execute("SELECT COUNT(*) FROM live_flight_cache").fetchone()[0])
+        size = GUEST_CACHE_DB.stat().st_size if GUEST_CACHE_DB.exists() else 0
+        return rows, size
+    except Exception:
+        return "error", "error"
+
+
+def _runtime_heartbeat(stop_event: threading.Event):
+    while not stop_event.wait(LOG_HEARTBEAT_SECONDS):
+        try:
+            with _sessions_lock:
+                sessions = len(_sessions)
+            with _share_cache_lock:
+                share_cache = len(_share_cache)
+            with _photo_date_cache_lock:
+                photo_cache = len(_photo_date_cache)
+            with _immich_date_cache_lock:
+                immich_cache = len(_immich_date_cache)
+            with _live_flight_cache_lock:
+                live_cache = len(_live_flight_cache)
+            db_rows, db_bytes = _persistent_cache_stats()
+            try:
+                disk = shutil.disk_usage(GUEST_CACHE_DB.parent)
+                disk_free = disk.free
+            except Exception:
+                disk_free = "unknown"
+            try:
+                rss_kb = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            except Exception:
+                rss_kb = "unknown"
+            metrics = _metrics_snapshot()
+            log_event(logging.INFO, "runtime.heartbeat",
+                      uptime_seconds=int(time.monotonic()-_started_monotonic), active_sessions=sessions,
+                      threads=threading.active_count(), rss_kb=rss_kb,
+                      share_cache_entries=share_cache, photo_cache_entries=photo_cache,
+                      immich_cache_entries=immich_cache, live_flight_cache_entries=live_cache,
+                      persistent_cache_rows=db_rows, persistent_cache_bytes=db_bytes,
+                      cache_disk_free_bytes=disk_free, **metrics)
+        except Exception as exc:
+            log_event(logging.WARNING, "runtime.heartbeat_failed", error=str(exc), exc_type=type(exc).__name__)
 
 
 def main():
@@ -1829,10 +2481,20 @@ def main():
     server = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     db = find_tracker_db()
     log_event(logging.INFO, "startup", version=VERSION, listen=f"{LISTEN_HOST}:{LISTEN_PORT}", public_root=PUBLIC_ROOT, log_level=LOG_LEVEL, public_origin=PUBLIC_ORIGIN, cookie_path=COOKIE_PATH)
+    invalid_proxy_entries = [part for part in re.split(r"[\s,]+", TRUSTED_PROXY_CIDRS_RAW) if part.strip() and not _parse_trusted_proxy_networks(part.strip())]
+    log_event(logging.INFO, "startup.runtime", uid=os.getuid() if hasattr(os, "getuid") else "unknown", gid=os.getgid() if hasattr(os, "getgid") else "unknown", client_ip_logging=LOG_CLIENT_IP, session_ttl=SESSION_TTL_SECONDS, session_max=SESSION_MAX, session_rate_per_minute=SESSION_CREATE_PER_MINUTE)
+    log_event(logging.INFO, "startup.logging", format=LOG_FORMAT, full_logging=FULL_LOGGING, static_requests=LOG_STATIC_REQUESTS, safe_request_headers=LOG_SAFE_REQUEST_HEADERS, client_event_logging=CLIENT_EVENT_LOGGING, client_event_rate_per_minute=CLIENT_EVENT_RATE_PER_MINUTE, heartbeat_seconds=LOG_HEARTBEAT_SECONDS)
+    log_event(logging.INFO, "startup.proxy_logging", trust_proxy_headers=TRUST_PROXY_HEADERS, client_ip_header=CLIENT_IP_HEADER, trusted_proxy_networks=len(_TRUSTED_PROXY_NETWORKS), invalid_proxy_entries=len(invalid_proxy_entries), proxy_details=LOG_PROXY_DETAILS)
+    log_event(logging.INFO, "startup.flight_scheduler", api_window_hours=FLIGHT_API_WINDOW_HOURS, upcoming_poll_seconds=FLIGHT_UPCOMING_POLL_SECONDS, active_poll_seconds=FLIGHT_ACTIVE_POLL_SECONDS, error_poll_seconds=FLIGHT_ERROR_POLL_SECONDS, aerodatabox_min_interval=AERODATABOX_MIN_INTERVAL, rate_limit_retries=AERODATABOX_429_RETRIES)
+    log_event(logging.INFO, "startup.timeouts", trek_seconds=UPSTREAM_TIMEOUT, aerodatabox_seconds=AERODATABOX_TIMEOUT, adsb_seconds=ADSB_TIMEOUT, immich_seconds=IMMICH_TIMEOUT)
     log_event(logging.INFO, "integration.flight_tracker", found=bool(db), db=db or "not-found")
     log_event(logging.INFO, "integration.aerodatabox", configured=aerodatabox_configured(), key_source=aerodatabox_key_source())
-    log_event(logging.INFO, "integration.immich", configured=immich_configured(), verify_tls=IMMICH_VERIFY_TLS)
-    log_event(logging.INFO, "integration.persistent_cache", enabled=_guest_cache_ready, db=GUEST_CACHE_DB, error=_guest_cache_error or "none")
+    log_event(logging.INFO, "integration.immich", configured=immich_configured(), verify_tls=IMMICH_VERIFY_TLS, date_cache_ttl=IMMICH_DATE_CACHE_TTL)
+    log_event(logging.INFO, "integration.persistent_cache", enabled=_guest_cache_ready, db=GUEST_CACHE_DB, max_rows=GUEST_CACHE_MAX_ROWS, error=_guest_cache_error or "none")
+    log_event(logging.INFO, "integration.mapbox_config", config_file_exists=(PUBLIC_ROOT / "config.js").is_file())
+    heartbeat_stop = threading.Event()
+    heartbeat_thread = threading.Thread(target=_runtime_heartbeat, args=(heartbeat_stop,), name="guest-portal-heartbeat", daemon=True)
+    heartbeat_thread.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -1841,6 +2503,10 @@ def main():
         log_event(logging.CRITICAL, "server.crash", error=str(exc), exc_type=type(exc).__name__)
         raise
     finally:
+        try:
+            heartbeat_stop.set()
+        except Exception:
+            pass
         server.server_close()
 
 

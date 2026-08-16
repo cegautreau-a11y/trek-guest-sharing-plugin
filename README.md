@@ -4,7 +4,7 @@
 
 TREK Guest Portal turns TREK's native public trip/Journey shares into a richer, mobile-friendly guest site without modifying the TREK application image. It is designed for Docker/Portainer deployments and keeps the guest-facing web app in a separate hardened companion container.
 
-**Current release:** `1.0.2`  
+**Current release:** `1.0.4`  
 **TREK compatibility:** `>=3.4.0 <4.0.0`  
 **License:** MIT
 
@@ -13,7 +13,7 @@ TREK Guest Portal turns TREK's native public trip/Journey shares into a richer, 
 Guest Portal intentionally exposes only four sections:
 
 - **Plan** — day-by-day itinerary with a Mapbox map rendered directly under the selected stop; the selected location is framed to a fixed 1 km geographic radius on desktop and mobile.
-- **Flights** — scheduled TREK transport cards plus optional live AeroDataBox/adsb.fi status, rate-limited auto refresh, persistent caching, and a visible next-refresh countdown.
+- **Flights** — scheduled TREK transport cards plus optional live AeroDataBox/adsb.fi status, quota-aware refresh scheduling (no AeroDataBox calls while >48h out), persistent caching, and separate browser/provider countdowns.
 - **Reservations** — accommodations and non-transport bookings. Transportation stays under Flights.
 - **Photos** — Journey photos grouped chronologically; with Immich configured, the companion resolves original capture dates server-side from the Immich asset metadata.
 
@@ -55,7 +55,9 @@ If you have never installed Guest Portal before, follow these in order:
 2. **[Fresh installation](docs/INSTALL.md)** — complete first-time install from zero.
 3. **[Configuration reference](docs/CONFIGURATION.md)** — environment variables, secret files, Mapbox settings, and sessions.
 4. **[Reverse proxy](docs/REVERSE-PROXY.md)** — Apache and Nginx examples.
-5. **[Troubleshooting](docs/TROUBLESHOOTING.md)** — startup logs, 503s, missing Mapbox, Immich dates, flight rate limits, and cache permissions.
+5. **[Logging](docs/LOGGING.md)** — correlated operational and scheduler diagnostics.
+6. **[Troubleshooting](docs/TROUBLESHOOTING.md)** — startup logs, 503s, missing Mapbox, Immich dates, flight rate limits, and cache permissions.
+7. **[Changelog](CHANGELOG.md)** — release history and the `Unreleased` section used to record future changes.
 
 Existing pre-1.0 users should read **[UPGRADING.md](docs/UPGRADING.md)** before replacing files.
 
@@ -113,9 +115,9 @@ No npm install is required to package the current source.
 Generated artifacts appear under `dist/`:
 
 ```text
-trek-guest-portal-1.0.2.zip
-trek-guest-portal-companion-1.0.2-portainer.zip
-trek-guest-portal-1.0.2-complete-bundle.zip
+trek-guest-portal-1.0.4.zip
+trek-guest-portal-companion-1.0.4-portainer.zip
+trek-guest-portal-1.0.4-complete-bundle.zip
 ```
 
 The first ZIP is uploaded through TREK Admin. The second is extracted onto the Docker host. The complete bundle contains both plus the install documentation.
@@ -146,3 +148,10 @@ Useful upstream documentation:
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Full-system logging
+
+v1.0.4 adds correlated operational logging across the guest browser, companion gateway, TREK public-share reads, Plan/Mapbox interactions, flight providers and scheduler, reservations, Immich/photos, caches, sessions, proxy/client identity and runtime health. Browser events are sent to a session-protected same-origin endpoint and appear in `docker logs trek-guest-portal`. Admin plugin configuration actions are logged through TREK's plugin logger in the `trek`/`app` container. Sensitive values are redacted or never accepted by the telemetry endpoint.
+
+See **[docs/LOGGING.md](docs/LOGGING.md)** for configuration and event reference.
+

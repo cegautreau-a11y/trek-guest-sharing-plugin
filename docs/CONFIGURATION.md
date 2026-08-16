@@ -10,7 +10,16 @@
 | `TREK_PORT` | `3000` | Yes | TREK backend port. |
 | `LISTEN_PORT` | `8080` | No | Companion container listener. |
 | `PUBLIC_ROOT` | `/srv/public` | No | Static guest app root. |
-| `LOG_LEVEL` | `INFO` | No | `INFO` recommended; temporary `DEBUG` for troubleshooting. |
+| `LOG_LEVEL` | `INFO` | No | `INFO` recommended; `DEBUG` adds low-level cache/provider details. |
+| `LOG_CLIENT_IP` | `false` | No | Include resolved client IPs in request logs only when explicitly enabled. |
+| `TRUST_PROXY_HEADERS` | `false` | No | Allow a client-IP header only from peers in `TRUSTED_PROXY_CIDRS`. |
+| `CLIENT_IP_HEADER` | `X-Guest-Client-IP` | No | Sanitized single-IP header supplied by the trusted reverse proxy. |
+| `TRUSTED_PROXY_CIDRS` | blank | No | Comma/space-separated proxy IPs/CIDRs allowed to supply `CLIENT_IP_HEADER`. Prefer exact `/32` or `/128` proxy addresses. |
+| `LOG_PROXY_DETAILS` | `true` | No | When IP logging is enabled, also log proxy peer plus Cloudflare Ray/country headers when present. |
+| `FLIGHT_API_WINDOW_HOURS` | `48` | No | Do not call AeroDataBox before this many hours to departure. |
+| `FLIGHT_UPCOMING_POLL_SECONDS` | `600` | No | Browser/server check interval outside the live-provider window. |
+| `FLIGHT_ACTIVE_POLL_SECONDS` | `60` | No | Browser/server check interval inside the live-provider window. |
+| `FLIGHT_ERROR_POLL_SECONDS` | `300` | No | Retry interval following temporary live-flight failures. |
 | `SESSION_TTL_SECONDS` | `43200` | No | Guest-session lifetime; bounded by the application. |
 | `SESSION_MAX` | `2048` | No | Maximum in-memory guest sessions. |
 | `SESSION_CREATE_PER_MINUTE` | `120` | No | Session creation rate limit. |
@@ -91,6 +100,25 @@ Use:
 docker logs -f trek-guest-portal
 ```
 
-At `INFO`, the companion records startup, provider configuration state, session lifecycle, flight/cache events, provider failures, and Immich date resolution summaries.
+At `INFO`, v1.0.4 records correlated HTTP/API requests, TREK upstream activity, session lifecycle, scheduler decisions, cache source/age, live-provider activity, rate limiting, media proxying, and Immich date-resolution summaries. `DEBUG` adds cache misses, queue waits, static requests, adsb.fi decisions, and lower-level metadata operations.
 
-The application is designed not to log provider keys or full native share tokens. Avoid adding reverse-proxy debug modules that record request bodies, because the initial `POST /api/session` body contains native share capabilities.
+See [LOGGING.md](LOGGING.md) for event names and examples.
+
+The application is designed not to log provider keys, guest-session cookie values, or full native share tokens. Avoid adding reverse-proxy debug modules that record request bodies, because the initial `POST /api/session` body contains native share capabilities.
+
+### Full-system logging
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `LOG_LEVEL` | `INFO` | Python log severity threshold (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+| `LOG_FORMAT` | `kv` | `kv` for human-readable Docker logs or `json` for structured ingestion. |
+| `FULL_LOGGING` | `true` | Enables the expanded operational event set. |
+| `LOG_STATIC_REQUESTS` | `true` | Logs static asset serving and SPA fallbacks. |
+| `LOG_SAFE_REQUEST_HEADERS` | `true` | Logs an allowlisted, non-secret subset of request headers. |
+| `CLIENT_EVENT_LOGGING` | `true` | Enables session-protected guest-browser telemetry. |
+| `CLIENT_EVENT_RATE_PER_MINUTE` | `240` | Per-session browser telemetry limit. |
+| `LOG_HEARTBEAT_SECONDS` | `300` | Runtime metrics heartbeat interval; minimum 60 seconds. |
+| `LOG_CLIENT_IP` | `false` | Logs resolved client IP. Enable only with the proxy trust configuration documented in `REVERSE-PROXY.md`. |
+| `LOG_PROXY_DETAILS` | `true` | Adds proxy-peer and Cloudflare request metadata when available. |
+
+See [LOGGING.md](LOGGING.md) for the event catalog and redaction policy.

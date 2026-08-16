@@ -134,7 +134,25 @@ Also check the provider's current plan quota/rate limit. Multiple unrelated appl
 
 ## Next auto refresh looks wrong
 
-The countdown represents the earliest refresh due among flights currently on the Flights tab. Completed flights stop continuous refresh. Upcoming flights use a longer interval based on departure proximity.
+In v1.0.4 the Flights header separates the browser check from the provider schedule:
+
+- more than 48 hours out: **Next auto refresh** should be about 10 minutes, while the detail line says when the live-provider window opens;
+- inside 48 hours: the browser checks every minute, but AeroDataBox is only called when the 30m / 5m / 1m provider TTL actually expires;
+- completed flights stop continuous refresh.
+
+Check the correlated scheduler event:
+
+```text
+flight.refresh_decision ... decision=suppress-aerodatabox ... api_window_open=False ... poll_after=600
+```
+
+If a flight more than 48 hours away logs `decision=call-aerodatabox`, capture the surrounding events with:
+
+```bash
+docker logs --since 10m trek-guest-portal | grep -E 'flight\.|aerodatabox\.'
+```
+
+and include them in a bug report. Full share tokens and API keys should not appear in those logs.
 
 ## Photos show `Undated`
 

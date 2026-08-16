@@ -1,4 +1,4 @@
-# TREK Guest Portal v1.0.2 - hardened companion service
+# TREK Guest Portal v1.0.4 - hardened companion service
 # Recommended: merge this service into the SAME Compose/Portainer stack as
 # TREK's `app` service so TREK_HOST=app resolves on the stack network.
 services:
@@ -27,6 +27,27 @@ services:
       - SESSION_MAX=${SESSION_MAX:-2048}
       - SESSION_CREATE_PER_MINUTE=${SESSION_CREATE_PER_MINUTE:-120}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-kv}
+      - FULL_LOGGING=${FULL_LOGGING:-true}
+      - LOG_STATIC_REQUESTS=${LOG_STATIC_REQUESTS:-true}
+      - LOG_SAFE_REQUEST_HEADERS=${LOG_SAFE_REQUEST_HEADERS:-true}
+      - CLIENT_EVENT_LOGGING=${CLIENT_EVENT_LOGGING:-true}
+      - CLIENT_EVENT_RATE_PER_MINUTE=${CLIENT_EVENT_RATE_PER_MINUTE:-240}
+      - LOG_HEARTBEAT_SECONDS=${LOG_HEARTBEAT_SECONDS:-300}
+      # Privacy-safe by default. When client IP logging is enabled behind a
+      # reverse proxy, trust only the explicitly configured proxy peer(s).
+      - LOG_CLIENT_IP=${LOG_CLIENT_IP:-false}
+      - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-false}
+      - CLIENT_IP_HEADER=${CLIENT_IP_HEADER:-X-Guest-Client-IP}
+      - TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS:-}
+      - LOG_PROXY_DETAILS=${LOG_PROXY_DETAILS:-true}
+
+      # Flight scheduler. Browser checks and provider calls are separate:
+      # >48h browser checks every 10m but AeroDataBox is not called.
+      - FLIGHT_API_WINDOW_HOURS=${FLIGHT_API_WINDOW_HOURS:-48}
+      - FLIGHT_UPCOMING_POLL_SECONDS=${FLIGHT_UPCOMING_POLL_SECONDS:-600}
+      - FLIGHT_ACTIVE_POLL_SECONDS=${FLIGHT_ACTIVE_POLL_SECONDS:-60}
+      - FLIGHT_ERROR_POLL_SECONDS=${FLIGHT_ERROR_POLL_SECONDS:-300}
 
       # Live flight integration. An empty secret disables live provider lookup;
       # scheduled TREK transport cards can still render from the public share.

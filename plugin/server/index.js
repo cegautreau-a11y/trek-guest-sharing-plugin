@@ -137,7 +137,7 @@ module.exports = definePlugin({
     await ctx.db.migrate('002_portal_base', `
       ALTER TABLE portals ADD COLUMN portal_base TEXT
     `);
-    ctx.log.info('Guest Portal v1.0.2 loaded');
+    ctx.log.info('Guest Portal v1.0.4 loaded');
   },
 
   routes: [
@@ -146,10 +146,13 @@ module.exports = definePlugin({
       path: '/config',
       auth: true,
       async handler(req, ctx) {
+        const started = Date.now();
+        const tripId = String(scalar(req.query && req.query.tripId) || '');
+        ctx.log.info(`Guest Portal config read start trip=${tripId || 'missing'}`);
         try {
-          const tripId = String(scalar(req.query && req.query.tripId) || '');
           const trip = await requireTripAccess(ctx, tripId);
           const row = await getPortal(ctx, tripId);
+          ctx.log.info(`Guest Portal config read complete trip=${tripId} configured=${Boolean(row)} journey=${Boolean(row && row.journey_token)} elapsed_ms=${Date.now()-started}`);
           return json(200, {
             trip: {
               id: String(trip.id ?? tripId),
@@ -158,6 +161,7 @@ module.exports = definePlugin({
             portal: publicPortal(row),
           });
         } catch (err) {
+          ctx.log.warn(`Guest Portal config read failed trip=${tripId || 'missing'} error=${String(err && err.message ? err.message : 'unknown').slice(0,180)} elapsed_ms=${Date.now()-started}`);
           return json(403, { error: err && err.message ? err.message : 'Unable to read portal configuration' });
         }
       },
@@ -167,9 +171,12 @@ module.exports = definePlugin({
       path: '/config',
       auth: true,
       async handler(req, ctx) {
+        const started = Date.now();
+        let tripId = '';
         try {
           const body = parseBody(req);
-          const tripId = String(body.tripId || '');
+          tripId = String(body.tripId || '');
+          ctx.log.info(`Guest Portal config write start trip=${tripId || 'missing'} has_trip_share=${Boolean(body.tripShare)} has_journey_share=${Boolean(body.journeyShare)} has_portal_base=${Boolean(body.portalBase)}`);
           const trip = await requireTripAccess(ctx, tripId);
           const shareToken = cleanToken(body.tripShare, 'trip');
           const journeyToken = cleanToken(body.journeyShare, 'journey');
@@ -211,8 +218,10 @@ module.exports = definePlugin({
           }
 
           const saved = await getPortal(ctx, tripId);
+          ctx.log.info(`Guest Portal config write complete trip=${tripId} journey=${Boolean(saved && saved.journey_token)} portal_base=${saved && saved.portal_base ? saved.portal_base : '/guest-portal/'} elapsed_ms=${Date.now()-started}`);
           return json(200, { ok: true, portal: publicPortal(saved) });
         } catch (err) {
+          ctx.log.warn(`Guest Portal config write failed trip=${tripId || 'missing'} error=${String(err && err.message ? err.message : 'unknown').slice(0,180)} elapsed_ms=${Date.now()-started}`);
           return json(403, { error: err && err.message ? err.message : 'Unable to save portal configuration' });
         }
       },

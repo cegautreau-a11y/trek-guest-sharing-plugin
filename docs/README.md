@@ -10,3 +10,5 @@
 - [Upgrading](UPGRADING.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [Publishing to GitHub](GITHUB.md)
+
+- [Logging](LOGGING.md) — request correlation, scheduler decisions, cache/provider events, and log security.
