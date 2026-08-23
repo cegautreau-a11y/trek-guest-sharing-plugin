@@ -1,50 +1,181 @@
 # Configuration Reference
 
-## Companion environment variables
+TREK Guest Portal is configured primarily through `.env`, provider secret files, and `public/config.js`.
 
-| Variable | Default | Required | Description |
-|---|---:|:---:|---|
-| `PUBLIC_ORIGIN` | none | **Yes** | Exact external HTTPS origin, e.g. `https://trek.example.com`. No path/query/fragment. |
-| `COOKIE_PATH` | `/guest-portal/` | Yes | Must match the reverse-proxy path. |
-| `TREK_HOST` | `app` | Yes | TREK backend hostname on the Docker network. |
-| `TREK_PORT` | `3000` | Yes | TREK backend port. |
-| `LISTEN_PORT` | `8080` | No | Companion container listener. |
-| `PUBLIC_ROOT` | `/srv/public` | No | Static guest app root. |
-| `LOG_LEVEL` | `INFO` | No | `INFO` recommended; `DEBUG` adds low-level cache/provider details. |
-| `LOG_CLIENT_IP` | `false` | No | Include resolved client IPs in request logs only when explicitly enabled. |
-| `TRUST_PROXY_HEADERS` | `false` | No | Allow a client-IP header only from peers in `TRUSTED_PROXY_CIDRS`. |
-| `CLIENT_IP_HEADER` | `X-Guest-Client-IP` | No | Sanitized single-IP header supplied by the trusted reverse proxy. |
-| `TRUSTED_PROXY_CIDRS` | blank | No | Comma/space-separated proxy IPs/CIDRs allowed to supply `CLIENT_IP_HEADER`. Prefer exact `/32` or `/128` proxy addresses. |
-| `LOG_PROXY_DETAILS` | `true` | No | When IP logging is enabled, also log proxy peer plus Cloudflare Ray/country headers when present. |
-| `FLIGHT_API_WINDOW_HOURS` | `48` | No | Do not call AeroDataBox before this many hours to departure. |
-| `FLIGHT_UPCOMING_POLL_SECONDS` | `600` | No | Browser/server check interval outside the live-provider window. |
-| `FLIGHT_ACTIVE_POLL_SECONDS` | `60` | No | Browser/server check interval inside the live-provider window. |
-| `FLIGHT_ERROR_POLL_SECONDS` | `300` | No | Retry interval following temporary live-flight failures. |
-| `SESSION_TTL_SECONDS` | `43200` | No | Guest-session lifetime; bounded by the application. |
-| `SESSION_MAX` | `2048` | No | Maximum in-memory guest sessions. |
-| `SESSION_CREATE_PER_MINUTE` | `120` | No | Session creation rate limit. |
-| `GUEST_CACHE_DB` | `/cache/guest-portal.db` | No | Guest Portal-owned persistent flight cache. |
-| `GUEST_CACHE_MAX_ROWS` | `512` | No | Maximum persistent live-flight cache rows. |
-| `AERODATABOX_API_KEY_FILE` | none | No | Recommended mounted secret path. |
-| `AERODATABOX_API_KEY` | none | No | Compatibility environment fallback; secret file preferred. |
-| `AERODATABOX_TIMEOUT` | `10` | No | Provider timeout seconds. |
-| `AERODATABOX_MIN_INTERVAL` | `1.6` | No | Global minimum spacing between provider calls. |
-| `AERODATABOX_429_RETRIES` | `2` | No | Retry count after HTTP 429. |
-| `AERODATABOX_429_BACKOFF` | `2.5` | No | Backoff base in seconds. |
-| `IMMICH_URL` | blank | No | Immich base URL. Blank disables direct Immich metadata lookup. |
-| `IMMICH_API_KEY_FILE` | none | No | Recommended Immich mounted secret. |
-| `IMMICH_API_KEY` | none | No | Compatibility environment fallback. |
-| `IMMICH_VERIFY_TLS` | `true` | No | Keep `true` unless you understand the TLS risk. |
-| `IMMICH_TIMEOUT` | `15` | No | Immich timeout seconds. |
-| `IMMICH_DATE_CACHE_TTL` | `86400` | No | Immich capture-date cache seconds. |
+## Docker Compose workflow
 
-`PUBLIC_ORIGIN` is intentionally required in the public repository build. This prevents an accidentally published companion from trusting an unrelated default hostname.
+Create the local environment file once:
 
-## Mapbox `config.js`
+```bash
+cp .env.example .env
+nano .env
+```
 
-`companion/public/config.js` is local deployment configuration and is ignored by Git.
+Validate after every change:
 
-Create it from `config.js.example`:
+```bash
+docker compose config
+```
+
+Apply changes with:
+
+```bash
+docker compose up -d
+```
+
+Provider API keys are intentionally **not** stored in `.env`.
+
+## Docker / TREK connectivity
+
+| Variable | Default/example | Purpose |
+|---|---:|---|
+| `TREK_DOCKER_NETWORK` | `trek_default` example | Exact existing Docker network used by TREK. The companion joins this external network. |
+| `TREK_HOST` | `app` | TREK service/DNS name on that Docker network. |
+| `TREK_PORT` | `3000` | TREK internal HTTP port. |
+| `UPSTREAM_TIMEOUT` | `20` | Timeout in seconds for TREK upstream requests. |
+| `GUEST_PORTAL_BIND_IP` | `127.0.0.1` | Host interface used to publish companion TCP/8088. Use one explicit LAN address only when the reverse proxy is remote. |
+| `GUEST_PORTAL_UID` | `65532` | UID used by the companion process. |
+| `GUEST_PORTAL_GID` | `65532` | GID used by the companion process. |
+
+Find TREK's network with:
+
+```bash
+docker inspect <TREK_CONTAINER> \
+  --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}'
+```
+
+The Compose project will fail to start if `TREK_DOCKER_NETWORK` does not name an existing Docker network.
+
+## Public origins and cookie path
+
+| Variable | Recommended | Purpose |
+|---|---|---|
+| `PUBLIC_ORIGIN` | `https://guest.example.com` | Exact HTTPS origin guests visit. Required. No path, query, fragment, or trailing slash is needed. |
+| `TREK_PUBLIC_ORIGIN` | `https://trek.example.com` | Main TREK browser origin. Used for the Host/X-Forwarded-Host values on server-side public-share validation requests. |
+| `COOKIE_PATH` | `/` | Guest session cookie path. Use `/` for a dedicated guest hostname. |
+
+Recommended dedicated-host settings:
+
+```dotenv
+PUBLIC_ORIGIN=https://guest.example.com
+TREK_PUBLIC_ORIGIN=https://trek.example.com
+COOKIE_PATH=/
+```
+
+Same-origin alternative:
+
+```dotenv
+PUBLIC_ORIGIN=https://trek.example.com
+TREK_PUBLIC_ORIGIN=
+COOKIE_PATH=/guest-portal/
+```
+
+Both `PUBLIC_ORIGIN` and the effective TREK origin must be HTTPS origins without a path, query, or fragment. The server refuses to start when these checks fail.
+
+## Guest sessions
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `SESSION_TTL_SECONDS` | `0` | Server-side session age limit. `0` disables age-based expiry. Positive values are clamped to a safe range. |
+| `SESSION_COOKIE_MAX_AGE_SECONDS` | `315360000` | Browser cookie Max-Age when sessions have no server-side age expiry. |
+| `SESSION_MAX` | `2048` | Maximum in-memory guest sessions. |
+| `SESSION_CREATE_PER_MINUTE` | `120` | Global session-creation rate limit. |
+
+Sessions are intentionally memory-only. Restarting/redeploying the companion invalidates them. Guests re-establish access by opening the original owner-generated share URL.
+
+## Logging and browser telemetry
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `LOG_LEVEL` | `INFO` | Python log level. `DEBUG` adds lower-level diagnostic events. |
+| `LOG_FORMAT` | `kv` | `kv` for human-readable key/value logs or `json` for structured ingestion. |
+| `FULL_LOGGING` | `true` | Enables the full operational event set. |
+| `LOG_STATIC_REQUESTS` | `true` | Includes static asset request events. |
+| `LOG_SAFE_REQUEST_HEADERS` | `true` | Logs a small allowlist of non-secret request headers. |
+| `CLIENT_EVENT_LOGGING` | `true` | Enables session-protected browser telemetry. |
+| `CLIENT_EVENT_RATE_PER_MINUTE` | `240` | Per-session browser telemetry event limit. |
+| `CLIENT_EVENT_MAX_BODY` | `8192` | Maximum accepted telemetry JSON body size in bytes. |
+| `LOG_HEARTBEAT_SECONDS` | `300` | Runtime heartbeat interval. |
+
+Browser telemetry is sanitized server-side. Fields whose names imply tokens, secrets, passwords, authorization, cookies, sessions, confirmations, email addresses, or phone numbers are rejected rather than logged.
+
+## Client IP / reverse-proxy trust
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LOG_CLIENT_IP` | `false` | Include resolved client IP information in logs. |
+| `TRUST_PROXY_HEADERS` | `false` | Accept the configured client-IP header only from trusted proxy peers. |
+| `CLIENT_IP_HEADER` | `X-Guest-Client-IP` | Application-specific header populated by the trusted reverse proxy. |
+| `TRUSTED_PROXY_CIDRS` | empty | Comma/space-separated immediate proxy peer CIDRs allowed to supply the header. |
+| `LOG_PROXY_DETAILS` | `true` | Include proxy peer/source information when client-IP logging is enabled. |
+
+Do not enable `TRUST_PROXY_HEADERS` without setting `TRUSTED_PROXY_CIDRS` to the actual immediate proxy address(es) seen by the companion. See [REVERSE-PROXY.md](REVERSE-PROXY.md).
+
+## Flight scheduler
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `FLIGHT_API_WINDOW_HOURS` | `48` | Live-provider window before scheduled departure. |
+| `FLIGHT_UPCOMING_POLL_SECONDS` | `600` | Browser/local check interval before the live-provider window. |
+| `FLIGHT_ACTIVE_POLL_SECONDS` | `60` | Browser/local check interval inside the live/active window. |
+| `FLIGHT_ERROR_POLL_SECONDS` | `300` | Retry interval after provider errors. |
+| `LIVE_FLIGHT_MAX_CACHE` | `256` | Maximum in-memory live-flight cache entries. |
+
+The browser poll interval does not equal the provider API interval. The server's provider TTL is authoritative and can suppress external calls even when guests check more frequently.
+
+## AeroDataBox and adsb.fi
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `AERODATABOX_TIMEOUT` | `10` | AeroDataBox request timeout in seconds. |
+| `AERODATABOX_MIN_INTERVAL` | `1.6` | Minimum interval between AeroDataBox calls across the process. |
+| `AERODATABOX_429_RETRIES` | `2` | Number of retries after HTTP 429. |
+| `AERODATABOX_429_BACKOFF` | `2.5` | Initial 429 retry backoff in seconds. |
+| `ADSB_TIMEOUT` | `8` | adsb.fi request timeout in seconds. |
+| `GUEST_CACHE_MAX_ROWS` | `512` | Maximum rows retained in the persistent live-flight cache. |
+
+The AeroDataBox key is read from:
+
+```text
+./secrets/aerodatabox_api_key
+```
+
+The Compose service mounts it inside the container as `/run/secrets/aerodatabox_api_key`. The server also contains a direct environment-variable fallback for non-standard deployments, but the supplied Docker Compose configuration deliberately does not expose provider keys through `.env`.
+
+## Immich and photo metadata
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `IMMICH_URL` | empty | Immich base URL. Leave blank to disable Immich enrichment. |
+| `IMMICH_VERIFY_TLS` | `true` | Verify Immich TLS certificates. Keep enabled in production. |
+| `IMMICH_TIMEOUT` | `15` | Immich request timeout in seconds. |
+| `IMMICH_DATE_CACHE_TTL` | `86400` | Immich asset capture-date cache TTL in seconds. |
+| `PHOTO_METADATA_PREFIX_BYTES` | `2097152` | Maximum prefix read from an original shared photo when parsing embedded EXIF/XMP date metadata. |
+| `PHOTO_DATE_CACHE_TTL` | `21600` | Embedded photo-date cache TTL in seconds. |
+
+The Immich API key is read from:
+
+```text
+./secrets/immich_api_key
+```
+
+The Compose service mounts it inside the container as `/run/secrets/immich_api_key`.
+
+## Browser Mapbox configuration
+
+Copy:
+
+```text
+public/config.js.example
+```
+
+to:
+
+```text
+public/config.js
+```
+
+Then configure:
 
 ```javascript
 window.GUEST_PORTAL_CONFIG = {
@@ -55,70 +186,31 @@ window.GUEST_PORTAL_CONFIG = {
 };
 ```
 
-Use a public browser token, not a Mapbox secret token. Restrict the token to the external origin when possible.
+`config.js` is public browser configuration and must not contain server secrets.
 
-## Secret files
+## Container-managed settings
 
-Recommended paths inside the container:
+The supplied Compose file fixes these internal values because normal deployments should not change them:
 
-```text
-/run/secrets/aerodatabox_api_key
-/run/secrets/immich_api_key
-```
+| Setting | Value |
+|---|---|
+| `LISTEN_PORT` | `8080` |
+| `PUBLIC_ROOT` | `/srv/public` |
+| `GUEST_CACHE_DB` | `/cache/guest-portal.db` |
+| `AERODATABOX_API_KEY_FILE` | `/run/secrets/aerodatabox_api_key` |
+| `IMMICH_API_KEY_FILE` | `/run/secrets/immich_api_key` |
+| `PYTHONDONTWRITEBYTECODE` | `1` |
+| `PYTHONUNBUFFERED` | `1` |
 
-Recommended host modes:
+The Python server also supports `LISTEN_HOST`; the supplied container intentionally uses its internal default (`0.0.0.0`) while Docker controls host exposure through `GUEST_PORTAL_BIND_IP`.
 
-```text
-secrets directory: 0700
-secret file:       0600
-owner:             65532:65532
-```
+## Apply configuration changes
 
-Empty secret files are valid and simply disable the associated integration.
-
-## Persistent cache
-
-Guest Portal owns its own SQLite file:
-
-```text
-/cache/guest-portal.db
-```
-
-The cache stores normalized flight refresh payloads and timestamps. It does not store provider API keys or native TREK/Journey share tokens.
-
-## Guest sessions
-
-Guest sessions are memory-only by design. Restarting the companion invalidates them. A guest can establish a new session by reopening the original owner-generated Guest Portal URL.
-
-The session cookie is scoped to `COOKIE_PATH` and set `HttpOnly`, `Secure`, and `SameSite=Strict`.
-
-## Logging
-
-Use:
+After changing `.env` or Compose settings:
 
 ```bash
-docker logs -f trek-guest-portal
+docker compose config
+docker compose up -d
 ```
 
-At `INFO`, v1.0.4 records correlated HTTP/API requests, TREK upstream activity, session lifecycle, scheduler decisions, cache source/age, live-provider activity, rate limiting, media proxying, and Immich date-resolution summaries. `DEBUG` adds cache misses, queue waits, static requests, adsb.fi decisions, and lower-level metadata operations.
-
-See [LOGGING.md](LOGGING.md) for event names and examples.
-
-The application is designed not to log provider keys, guest-session cookie values, or full native share tokens. Avoid adding reverse-proxy debug modules that record request bodies, because the initial `POST /api/session` body contains native share capabilities.
-
-### Full-system logging
-
-| Variable | Default | Purpose |
-|---|---:|---|
-| `LOG_LEVEL` | `INFO` | Python log severity threshold (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
-| `LOG_FORMAT` | `kv` | `kv` for human-readable Docker logs or `json` for structured ingestion. |
-| `FULL_LOGGING` | `true` | Enables the expanded operational event set. |
-| `LOG_STATIC_REQUESTS` | `true` | Logs static asset serving and SPA fallbacks. |
-| `LOG_SAFE_REQUEST_HEADERS` | `true` | Logs an allowlisted, non-secret subset of request headers. |
-| `CLIENT_EVENT_LOGGING` | `true` | Enables session-protected guest-browser telemetry. |
-| `CLIENT_EVENT_RATE_PER_MINUTE` | `240` | Per-session browser telemetry limit. |
-| `LOG_HEARTBEAT_SECONDS` | `300` | Runtime metrics heartbeat interval; minimum 60 seconds. |
-| `LOG_CLIENT_IP` | `false` | Logs resolved client IP. Enable only with the proxy trust configuration documented in `REVERSE-PROXY.md`. |
-| `LOG_PROXY_DETAILS` | `true` | Adds proxy-peer and Cloudflare request metadata when available. |
-
-See [LOGGING.md](LOGGING.md) for the event catalog and redaction policy.
+After changing only `public/config.js`, restart is not normally required because the file is bind-mounted, but guests may need a hard refresh if the browser cached an older asset.

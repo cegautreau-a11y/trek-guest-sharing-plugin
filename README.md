@@ -1,157 +1,199 @@
 # TREK Guest Portal
 
-> Unofficial, third-party guest sharing extension for the self-hosted [TREK travel planner](https://github.com/liketrek/TREK).
+> Hardened guest-sharing extension for the self-hosted [TREK travel planner](https://github.com/liketrek/TREK), providing a polished mobile-friendly portal for shared trips, flights, reservations, and Journey photos.
 
-TREK Guest Portal turns TREK's native public trip/Journey shares into a richer, mobile-friendly guest site without modifying the TREK application image. It is designed for Docker/Portainer deployments and keeps the guest-facing web app in a separate hardened companion container.
+TREK Guest Portal turns TREK's native public trip and Journey shares into a richer guest site without modifying the TREK application image. The project has two components: an Admin-uploadable TREK plugin that stores per-trip share configuration, and a hardened companion container that serves the anonymous guest experience.
 
-**Current release:** `1.0.4`  
+**Current release:** `1.2.2`  
 **TREK compatibility:** `>=3.4.0 <4.0.0`  
+**Deployment:** Docker Compose  
 **License:** MIT
 
-## What guests see
+## Guest experience
 
-Guest Portal intentionally exposes only four sections:
+Guest Portal intentionally exposes four sections:
 
-- **Plan** — day-by-day itinerary with a Mapbox map rendered directly under the selected stop; the selected location is framed to a fixed 1 km geographic radius on desktop and mobile.
-- **Flights** — scheduled TREK transport cards plus optional live AeroDataBox/adsb.fi status, quota-aware refresh scheduling (no AeroDataBox calls while >48h out), persistent caching, and separate browser/provider countdowns.
-- **Reservations** — accommodations and non-transport bookings. Transportation stays under Flights.
-- **Photos** — Journey photos grouped chronologically; with Immich configured, the companion resolves original capture dates server-side from the Immich asset metadata.
+- **Plan** — a unified day-by-day timeline combining planned stops, flights/transport, bookings, and accommodation **Check-in / Stay / Check-out** events. Place-linked bookings remain attached to their stop, flights are positioned between matching departure/arrival airport places when possible, and Mapbox retains inline selected-stop focus with a fixed 1 km framing radius.
+- **Flights** — TREK transport cards plus optional AeroDataBox/adsb.fi live data, quota-aware provider scheduling, in-memory and persistent caching, and separate browser/provider countdowns.
+- **Reservations** — accommodations (including standalone `hotel` bookings) and other non-transport bookings in separate sections. Linked TREK Hotel partner records are deduplicated.
+- **Photos** — Journey gallery media grouped chronologically; optional Immich integration resolves original asset capture dates server-side.
 
-Flights and Reservations remain visible even when empty. Journal, Packing, Budget, Collab, and external “Open in Maps” links are not shown.
+Flights and Reservations remain visible even when empty. Journal, Packing, Budget, Collab, and external "Open in Maps" links are intentionally omitted from the guest view.
 
-## Why there are two components
+Booking confirmation codes, confirmation numbers, booking references, and equivalent reservation reference identifiers are intentionally **not exposed anywhere in the Guest Portal UI or guest `/api/trip` response**.
+
+## Architecture
 
 ```text
 TREK authenticated UI
        │
-       │ Admin-uploadable trip-page plugin
+       │ Admin-uploadable Guest Portal plugin
        ▼
-Guest Portal configuration
-       │ creates owner guest URL
+Per-trip Guest Portal configuration
+       │ generates owner guest URL
        ▼
-https://trek.example.com/guest-portal/#trip=...&journey=...
+https://guest.example.com/#trip=...&journey=...
        │
        ▼
-Reverse proxy (/guest-portal/)
+HTTPS reverse proxy
        │
        ▼
-Hardened companion container
+TREK Guest Portal companion container
        │
        ├── validates native TREK/Journey public shares
-       ├── creates short-lived HttpOnly guest sessions
+       ├── exchanges share capabilities for an HttpOnly guest session
        ├── renders Plan / Flights / Reservations / Photos
        ├── talks to Mapbox from the browser
        ├── queries Immich server-side for capture dates (optional)
        └── queries AeroDataBox/adsb.fi server-side for live flights (optional)
 ```
 
-TREK plugins are intentionally sandboxed and are not meant to serve arbitrary anonymous HTML from plugin API routes. The companion exists so the public guest site can be served normally while the TREK plugin remains update-safe.
+The companion does **not** mount or read TREK plugin databases at runtime. Provider credentials are stored in dedicated mounted secret files. A bundled one-shot helper can read an existing Flight Tracker database manually to copy only its AeroDataBox key before the public container starts.
+
+## Recommended origin layout
+
+TREK is a PWA and may register a Service Worker on its own origin. For reliable guest navigation in the same browser that is already signed in to TREK, use a dedicated Guest Portal hostname:
+
+```text
+TREK:         https://trek.example.com/
+Guest Portal: https://guest.example.com/
+```
+
+Recommended `.env` values:
+
+```dotenv
+PUBLIC_ORIGIN=https://guest.example.com
+TREK_PUBLIC_ORIGIN=https://trek.example.com
+COOKIE_PATH=/
+```
+
+A same-origin `/guest-portal/` deployment remains supported when required. See [docs/GUEST-ORIGIN.md](docs/GUEST-ORIGIN.md) and [docs/REVERSE-PROXY.md](docs/REVERSE-PROXY.md).
+
+## Docker Compose deployment
+
+The companion release is a standalone Docker Compose project. It joins TREK's existing Docker network so `TREK_HOST=app` can resolve through Docker DNS without modifying TREK's Compose file.
+
+After extracting the companion release:
+
+```bash
+cd /opt/trek-guest-portal
+cp .env.example .env
+nano .env
+```
+
+Set `TREK_DOCKER_NETWORK` to the Docker network used by the running TREK application, then validate and start:
+
+```bash
+docker compose config
+docker compose up -d
+docker compose ps
+docker compose logs --tail=100 trek-guest-portal
+```
+
+The full first-time procedure is in [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Start here
 
-If you have never installed Guest Portal before, follow these in order:
+New installations should follow these documents in order:
 
-1. **[Prerequisites](docs/PREREQUISITES.md)** — confirm TREK, Docker, HTTPS, Mapbox, and optional provider requirements.
-2. **[Fresh installation](docs/INSTALL.md)** — complete first-time install from zero.
-3. **[Configuration reference](docs/CONFIGURATION.md)** — environment variables, secret files, Mapbox settings, and sessions.
-4. **[Reverse proxy](docs/REVERSE-PROXY.md)** — Apache and Nginx examples.
-5. **[Logging](docs/LOGGING.md)** — correlated operational and scheduler diagnostics.
-6. **[Troubleshooting](docs/TROUBLESHOOTING.md)** — startup logs, 503s, missing Mapbox, Immich dates, flight rate limits, and cache permissions.
-7. **[Changelog](CHANGELOG.md)** — release history and the `Unreleased` section used to record future changes.
+1. [Prerequisites](docs/PREREQUISITES.md)
+2. [Fresh installation](docs/INSTALL.md)
+3. [Configuration reference](docs/CONFIGURATION.md)
+4. [Dedicated guest origin](docs/GUEST-ORIGIN.md)
+5. [Reverse proxy](docs/REVERSE-PROXY.md)
+6. [Logging](docs/LOGGING.md)
+7. [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-Existing pre-1.0 users should read **[UPGRADING.md](docs/UPGRADING.md)** before replacing files.
+Existing installations should read [UPGRADING.md](docs/UPGRADING.md) before replacing files.
 
 ## Repository layout
 
 ```text
 .
-├── README.md                       # project overview / entry point
-├── SECURITY.md                     # security model + reporting guidance
+├── README.md
 ├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── LICENSE
+├── SECURITY.md
 ├── VERSION
-├── plugin/                         # TREK Admin-uploadable trip-page plugin
-│   ├── trek-plugin.json
-│   ├── package.json
-│   ├── client/
-│   └── server/
-├── companion/                      # public guest-site companion
+├── .env.example
+├── companion/
+│   ├── docker-compose.yml
+│   ├── README.md
 │   ├── public/
 │   ├── server/
-│   ├── tools/
-│   ├── docker-compose.yml
-│   └── Dockerfile
-├── docs/                           # installation/operations documentation
-├── examples/                       # copy/paste proxy + Portainer examples
-├── scripts/                        # validation and release packaging
-├── tests/                          # security/session smoke tests
-├── .github/                        # CI, issue templates, release workflow
-└── dist/                           # locally generated release ZIPs (gitignored)
+│   └── tools/
+├── plugin/
+│   ├── client/
+│   ├── server/
+│   ├── trek-plugin.json
+│   └── package.json
+├── docs/
+├── examples/
+├── scripts/
+└── tests/
 ```
 
-## Security design
+`companion/public/config.js` is deployment-local and intentionally excluded from source control. Copy `config.js.example` during installation.
 
-The v1.x line was redesigned so native TREK/Journey bearer tokens do not appear in ordinary guest API URLs:
+## Release artifacts
 
-1. the owner-generated URL carries native share capabilities only in the URL fragment (`#...`);
-2. the browser sends them once in a JSON body to `POST /api/session`;
-3. the companion validates them against TREK;
-4. the browser receives a random `HttpOnly; Secure; SameSite=Strict` session cookie;
-5. the fragment is removed from the visible URL/history;
-6. later requests use token-free endpoints such as `/api/trip`, `/api/flights/<id>`, and `/api/photo-dates`.
+A release build produces:
 
-The recommended runtime does **not** mount TREK's database, uploads directory, plugin directory, or plugin-data directory. Provider credentials are mounted as read-only secret files. See [SECURITY.md](SECURITY.md) for the full threat model.
+```text
+trek-guest-portal-1.2.2.zip
+trek-guest-portal-companion-1.2.2.zip
+trek-guest-portal-1.2.2-complete-bundle.zip
+```
 
-## Build release artifacts
+- `trek-guest-portal-1.2.2.zip` — upload directly through **TREK → Admin → Plugins**.
+- `trek-guest-portal-companion-1.2.2.zip` — extract on the Docker host and deploy with `docker compose`.
+- `trek-guest-portal-1.2.2-complete-bundle.zip` — plugin, companion and repository documentation in one archive.
 
-No npm install is required to package the current source.
+`dist/SHA256SUMS` is generated alongside the release artifacts.
+
+## Security model
+
+Native TREK/Journey share capabilities appear only in the owner-generated URL fragment. The browser sends them in the JSON body of `POST /api/session`; the companion validates the underlying shares and issues a `Secure; HttpOnly; SameSite=Strict` guest-session cookie. The fragment is intentionally retained in the address bar so refreshing the page can reconstruct a lost/restarted session. URL fragments are not included in normal HTTP request URLs, and later Guest Portal API requests use the session cookie rather than placing bearer tokens in API URLs. Anyone who obtains the complete owner-generated URL has the same read-only bearer access as the underlying shares.
+
+Additional hardening includes:
+
+- exact HTTPS origin validation;
+- same-origin checks for session creation, logout and browser telemetry;
+- bounded/rate-limited memory-only guest sessions;
+- non-root container execution;
+- read-only root filesystem;
+- all Linux capabilities dropped;
+- `no-new-privileges`;
+- hardened tmpfs;
+- dedicated secret-file mounts;
+- persistent Guest Portal-owned SQLite cache only;
+- trusted-proxy CIDR validation before forwarded client IPs are accepted;
+- CSP and additional security response headers;
+- structured logging with sensitive-field filtering and token fingerprinting.
+
+Read [SECURITY.md](SECURITY.md) before exposing Guest Portal publicly.
+
+## Logging and diagnostics
+
+The companion emits correlated operational logs for HTTP requests, guest sessions, TREK public-share reads, Mapbox/browser activity, live flight scheduling/providers, reservations, Journey/Immich photo handling, caches, proxy identity and runtime health. Browser telemetry uses a session-protected same-origin endpoint. Sensitive values are excluded, redacted, or represented only by short hashes.
+
+```bash
+docker compose logs -f trek-guest-portal
+```
+
+See [docs/LOGGING.md](docs/LOGGING.md) for configuration and event families.
+
+## Development and validation
+
+Run the source validation and regression suite before packaging:
 
 ```bash
 ./scripts/validate.sh
+python3 -m unittest discover -s tests -v
 ./scripts/package-release.sh
 ```
 
-Generated artifacts appear under `dist/`:
+The validation script checks Python/JavaScript syntax, version consistency, Docker Compose/documentation consistency, release package references, forbidden deployment-specific strings, and stale project version references.
 
-```text
-trek-guest-portal-1.0.4.zip
-trek-guest-portal-companion-1.0.4-portainer.zip
-trek-guest-portal-1.0.4-complete-bundle.zip
-```
+## Project status
 
-The first ZIP is uploaded through TREK Admin. The second is extracted onto the Docker host. The complete bundle contains both plus the install documentation.
-
-## External services
-
-Guest Portal can operate with only TREK + Mapbox. Additional integrations are optional:
-
-- **Immich** — original capture-date lookup for Journey photos.
-- **AeroDataBox** — live flight schedule/status information.
-- **adsb.fi** — live aircraft position information when available.
-- **Flight Tracker TREK plugin** — not required at runtime. The bundled one-shot helper can copy its existing AeroDataBox key into Guest Portal's dedicated secret file when that key is stored in the plugin's own SQLite `kv` table.
-
-## Compatibility and support boundary
-
-This project is not part of TREK and is not endorsed by its maintainers. TREK's plugin API and public-share schema can change. The manifest intentionally prevents installation on TREK `4.x` until compatibility is reviewed.
-
-Useful upstream documentation:
-
-- [TREK Wiki](https://github.com/liketrek/TREK/wiki)
-- [TREK Plugins](https://github.com/liketrek/TREK/wiki/Plugins)
-- [TREK Public Share Links](https://github.com/liketrek/TREK/wiki/Public-Share-Links)
-- [TREK Security Hardening](https://github.com/liketrek/TREK/wiki/Security-Hardening)
-- [Mapbox access-token security](https://docs.mapbox.com/help/dive-deeper/how-to-use-mapbox-securely/)
-- [Immich API documentation](https://docs.immich.app/api/)
-- [AeroDataBox API documentation](https://doc.aerodatabox.com/)
-
-## License
-
-MIT. See [LICENSE](LICENSE).
-
-## Full-system logging
-
-v1.0.4 adds correlated operational logging across the guest browser, companion gateway, TREK public-share reads, Plan/Mapbox interactions, flight providers and scheduler, reservations, Immich/photos, caches, sessions, proxy/client identity and runtime health. Browser events are sent to a session-protected same-origin endpoint and appear in `docker logs trek-guest-portal`. Admin plugin configuration actions are logged through TREK's plugin logger in the `trek`/`app` container. Sensitive values are redacted or never accepted by the telemetry endpoint.
-
-See **[docs/LOGGING.md](docs/LOGGING.md)** for configuration and event reference.
-
+TREK Guest Portal is an unofficial third-party extension and is not part of the upstream TREK project. Re-test compatibility before upgrading to a new TREK major release.

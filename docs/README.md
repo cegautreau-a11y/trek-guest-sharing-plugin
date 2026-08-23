@@ -3,6 +3,7 @@
 - [Prerequisites](PREREQUISITES.md)
 - [Fresh installation](INSTALL.md)
 - [Configuration reference](CONFIGURATION.md)
+- [Dedicated guest origin](GUEST-ORIGIN.md)
 - [Reverse proxy](REVERSE-PROXY.md)
 - [Architecture](ARCHITECTURE.md)
 - [Flights](FLIGHTS.md)

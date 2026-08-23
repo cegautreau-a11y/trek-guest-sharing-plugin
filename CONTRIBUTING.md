@@ -5,13 +5,13 @@
 - Python 3.12+
 - Node.js 20+ (syntax checking; the runtime plugin itself is packaged by TREK)
 - `zip`
-- Docker for end-to-end deployment testing
+- Docker Engine with Docker Compose v2 for end-to-end deployment testing
 
 ## Before a pull request
 
 ```bash
 ./scripts/validate.sh
-python -m unittest discover -s tests -v
+python3 -m unittest discover -s tests -v
 ```
 
 ## Security rules for contributions

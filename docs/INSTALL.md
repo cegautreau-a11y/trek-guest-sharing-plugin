@@ -1,34 +1,20 @@
 # Fresh Installation
 
-This procedure is written for someone who has **never installed TREK Guest Portal before**.
-
-## Before you begin
-
-Read [PREREQUISITES.md](PREREQUISITES.md). You should already have:
-
-- a working TREK 3.4.x Docker/Portainer deployment;
-- an HTTPS hostname for TREK;
-- a Mapbox public token;
-- administrator access to TREK and the Docker host.
-
-Immich and live AeroDataBox flight data are optional and can be added later.
-
----
+This is the complete first-time installation procedure for TREK Guest Portal 1.2.2 using Docker Compose.
 
 ## Step 1 — Download the release files
 
-From the GitHub release, download:
+Download these two files from the release:
 
 ```text
-trek-guest-portal-1.0.4.zip
-trek-guest-portal-companion-1.0.4-portainer.zip
+trek-guest-portal-1.2.2.zip
+trek-guest-portal-companion-1.2.2.zip
 ```
 
-The first file is the TREK plugin. **Do not unzip it before uploading it to TREK.**
+- `trek-guest-portal-1.2.2.zip` is uploaded directly to TREK. Do not unzip it first.
+- `trek-guest-portal-companion-1.2.2.zip` is extracted on the Docker host.
 
-The second file is extracted on the Docker host.
-
----
+Optionally verify the published SHA-256 checksums before installation.
 
 ## Step 2 — Install the TREK plugin
 
@@ -37,7 +23,7 @@ In TREK:
 1. Sign in as an administrator.
 2. Open **Admin → Plugins**.
 3. Choose **Upload**.
-4. Select `trek-guest-portal-1.0.4.zip`.
+4. Select `trek-guest-portal-1.2.2.zip`.
 5. Review the requested permissions:
 
 ```text
@@ -47,59 +33,47 @@ db:read:trips
 
 6. Enable **Guest Portal**.
 
-The plugin does not serve the anonymous site itself. Its job is to save the native share tokens for a trip and generate the single owner guest URL.
+The plugin stores per-trip Guest Portal configuration and generates the owner guest URL. The anonymous guest site is served by the companion container.
 
----
+## Step 3 — Extract the companion
 
-## Step 3 — Choose a companion host directory
-
-This documentation uses:
-
-```text
-/opt/trek-guest-portal
-```
-
-You may use another path, but change `GUEST_PORTAL_ROOT`/volume sources accordingly.
-
-Create it and extract the companion ZIP:
+This guide uses `/opt/trek-guest-portal`:
 
 ```bash
 sudo mkdir -p /opt/trek-guest-portal
-sudo unzip trek-guest-portal-companion-1.0.4-portainer.zip -d /opt/trek-guest-portal
+sudo unzip trek-guest-portal-companion-1.2.2.zip -d /opt/trek-guest-portal
+cd /opt/trek-guest-portal
 ```
 
-Expected files:
+Expected top-level layout:
 
 ```text
 /opt/trek-guest-portal/
+├── .env.example
+├── docker-compose.yml
+├── README.md
+├── SECURITY.md
+├── VERSION
 ├── public/
 │   ├── app.js
+│   ├── config.js.example
 │   ├── index.html
-│   ├── style.css
-│   └── config.js.example
+│   └── style.css
 ├── server/
 │   └── server.py
 ├── tools/
-│   ├── extract-flight-tracker-key.py
-│   └── find-flight-tracker-db.py
-├── docker-compose.yml
-├── README.md
-└── SECURITY.md
+├── docs/
+└── examples/
 ```
 
----
-
-## Step 4 — Create the local Mapbox configuration
-
-Copy the example:
+## Step 4 — Create the Mapbox browser configuration
 
 ```bash
-sudo cp /opt/trek-guest-portal/public/config.js.example \
-        /opt/trek-guest-portal/public/config.js
-sudo nano /opt/trek-guest-portal/public/config.js
+sudo cp public/config.js.example public/config.js
+sudo nano public/config.js
 ```
 
-Set your **public `pk...` Mapbox token**:
+Set a browser-safe public Mapbox token:
 
 ```javascript
 window.GUEST_PORTAL_CONFIG = {
@@ -110,51 +84,38 @@ window.GUEST_PORTAL_CONFIG = {
 };
 ```
 
-Recommended: create a token specifically for Guest Portal and restrict it to your HTTPS origin, for example:
+For the recommended dedicated guest hostname, restrict the token to:
 
 ```text
-https://trek.example.com/*
+https://guest.example.com/*
 ```
 
-`config.js` is intentionally ignored by Git and must never contain a Mapbox secret (`sk...`) token.
+Do not use a secret `sk...` Mapbox token.
 
----
-
-## Step 5 — Create cache and secret files
+## Step 5 — Create writable cache and secret files
 
 The companion runs as UID/GID `65532:65532` by default.
 
 ```bash
-sudo install -d -o 65532 -g 65532 -m 0700 /opt/trek-guest-portal/cache
-sudo install -d -o 65532 -g 65532 -m 0700 /opt/trek-guest-portal/secrets
-
-# Create empty optional secret files so long-form Compose mounts are valid.
-sudo install -o 65532 -g 65532 -m 0600 /dev/null /opt/trek-guest-portal/secrets/aerodatabox_api_key
-sudo install -o 65532 -g 65532 -m 0600 /dev/null /opt/trek-guest-portal/secrets/immich_api_key
+sudo install -d -o 65532 -g 65532 -m 0700 cache secrets
+sudo install -o 65532 -g 65532 -m 0600 /dev/null secrets/aerodatabox_api_key
+sudo install -o 65532 -g 65532 -m 0600 /dev/null secrets/immich_api_key
 ```
 
-The persistent flight cache will be created later as:
+Empty secret files are valid when the optional integration is disabled. The Compose bind mounts intentionally require these paths to exist before startup.
 
-```text
-/opt/trek-guest-portal/cache/guest-portal.db
-```
-
-### Optional: configure AeroDataBox now
-
-If you have an AeroDataBox/RapidAPI key, write it without echoing it to the terminal:
+### Optional AeroDataBox key
 
 ```bash
 umask 077
 read -rsp "AeroDataBox API key: " ADB_KEY; echo
-printf '%s' "$ADB_KEY" | sudo tee /opt/trek-guest-portal/secrets/aerodatabox_api_key >/dev/null
+printf '%s' "$ADB_KEY" | sudo tee secrets/aerodatabox_api_key >/dev/null
 unset ADB_KEY
-sudo chown 65532:65532 /opt/trek-guest-portal/secrets/aerodatabox_api_key
-sudo chmod 600 /opt/trek-guest-portal/secrets/aerodatabox_api_key
+sudo chown 65532:65532 secrets/aerodatabox_api_key
+sudo chmod 600 secrets/aerodatabox_api_key
 ```
 
-#### Optional Flight Tracker key extractor
-
-If you already have the third-party Flight Tracker TREK plugin and entered its key through the plugin's own in-widget key field, the helper can copy it into Guest Portal's dedicated secret file:
+If an existing Flight Tracker plugin database contains the provider key in its SQLite `kv` table, use the bundled one-shot extractor instead of exposing the key on screen:
 
 ```bash
 docker run --rm \
@@ -165,243 +126,309 @@ docker run --rm \
   python /tools/extract-flight-tracker-key.py /scan /out/aerodatabox_api_key
 ```
 
-Then:
+Then restore ownership/permissions:
 
 ```bash
-sudo chown 65532:65532 /opt/trek-guest-portal/secrets/aerodatabox_api_key
-sudo chmod 600 /opt/trek-guest-portal/secrets/aerodatabox_api_key
+sudo chown 65532:65532 secrets/aerodatabox_api_key
+sudo chmod 600 secrets/aerodatabox_api_key
 ```
 
-**Important:** the extractor cannot recover a key stored only in TREK's encrypted Admin plugin configuration. In that case use the manual secret method above.
+The long-running Guest Portal container never mounts the TREK plugin-data directory.
 
-### Optional: configure Immich now
-
-Create a dedicated Immich API key with only the asset-read permissions Guest Portal needs, then:
+### Optional Immich key
 
 ```bash
 umask 077
 read -rsp "Immich API key: " IMMICH_KEY; echo
-printf '%s' "$IMMICH_KEY" | sudo tee /opt/trek-guest-portal/secrets/immich_api_key >/dev/null
+printf '%s' "$IMMICH_KEY" | sudo tee secrets/immich_api_key >/dev/null
 unset IMMICH_KEY
-sudo chown 65532:65532 /opt/trek-guest-portal/secrets/immich_api_key
-sudo chmod 600 /opt/trek-guest-portal/secrets/immich_api_key
+sudo chown 65532:65532 secrets/immich_api_key
+sudo chmod 600 secrets/immich_api_key
 ```
 
----
+## Step 6 — Find TREK's Docker network
 
-## Step 6 — Add the companion service to Portainer / Compose
+Identify the TREK application container:
 
-**Recommended:** put Guest Portal in the same stack as TREK's service named `app`. Then `TREK_HOST=app` works through Docker DNS.
-
-Copy the service from [`examples/portainer-service.yml`](../examples/portainer-service.yml) into the existing `services:` block of the TREK stack.
-
-At minimum, set these values:
-
-```yaml
-ports:
-  - "127.0.0.1:8088:8080"   # use when reverse proxy is on same host
-
-environment:
-  - TREK_HOST=app
-  - TREK_PORT=3000
-  - PUBLIC_ORIGIN=https://trek.example.com
-  - COOKIE_PATH=/guest-portal/
-  - IMMICH_URL=https://photos.example.com   # leave empty if unused
-
-volumes:
-  # change /opt/trek-guest-portal if you chose another host path
+```bash
+docker ps --format 'table {{.Names}}\t{{.Image}}'
 ```
 
-### If your reverse proxy is on another server
+Then list its networks:
 
-Do not bind `8088` to all interfaces unless necessary. Bind it to the Docker host's specific LAN IP:
-
-```yaml
-ports:
-  - "10.0.0.20:8088:8080"
+```bash
+docker inspect <TREK_CONTAINER> \
+  --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}'
 ```
 
-Then firewall TCP/8088 so only the reverse-proxy server can connect.
+Choose the network on which TREK's application service is reachable. The companion joins this existing network as a separate Compose project.
 
-### If Guest Portal is in a separate Compose stack
+If you are unsure which service name TREK exposes on that network, inspect aliases:
 
-`TREK_HOST=app` will not resolve unless both stacks share a Docker network. Either:
+```bash
+docker inspect <TREK_CONTAINER> --format '{{json .NetworkSettings.Networks}}'
+```
 
-- attach Guest Portal to the existing TREK Docker network and use the TREK service/container DNS name; or
-- use a private reachable TREK backend address for `TREK_HOST`/`TREK_PORT`.
+The standard configuration uses `TREK_HOST=app` and `TREK_PORT=3000`.
 
-Keeping it in the same stack is simpler and preferred.
+## Step 7 — Create `.env`
 
----
+```bash
+sudo cp .env.example .env
+sudo nano .env
+```
 
-## Step 7 — Configure the reverse proxy
+At minimum, set the actual Docker network and public origins:
 
-Guest Portal should be reachable at:
+```dotenv
+TREK_DOCKER_NETWORK=<exact-trek-network-name>
+TREK_HOST=app
+TREK_PORT=3000
+
+GUEST_PORTAL_BIND_IP=127.0.0.1
+
+PUBLIC_ORIGIN=https://guest.example.com
+TREK_PUBLIC_ORIGIN=https://trek.example.com
+COOKIE_PATH=/
+```
+
+If your reverse proxy is on another host, change only the bind address to one explicit LAN IP:
+
+```dotenv
+GUEST_PORTAL_BIND_IP=10.0.0.20
+```
+
+Firewall TCP/8088 so only the reverse proxy can reach it. Avoid `0.0.0.0` unless you have a deliberate firewall design.
+
+For a same-origin deployment instead:
+
+```dotenv
+PUBLIC_ORIGIN=https://trek.example.com
+TREK_PUBLIC_ORIGIN=
+COOKIE_PATH=/guest-portal/
+```
+
+See [CONFIGURATION.md](CONFIGURATION.md) for every setting.
+
+## Step 8 — Validate Docker Compose before starting
+
+Run from the directory containing `docker-compose.yml` and `.env`:
+
+```bash
+cd /opt/trek-guest-portal
+docker compose config
+```
+
+Confirm that:
+
+- the external network name is the real TREK network;
+- `PUBLIC_ORIGIN` and `TREK_PUBLIC_ORIGIN` contain no path;
+- the published port is bound only to the intended host interface;
+- `TREK_HOST` and `TREK_PORT` match the reachable TREK service.
+
+Start the companion:
+
+```bash
+docker compose up -d
+```
+
+Check container and health status:
+
+```bash
+docker compose ps
+docker compose logs --tail=100 trek-guest-portal
+```
+
+A healthy startup includes a line similar to:
 
 ```text
-https://trek.example.com/guest-portal/
+INFO startup version=1.2.2 ... public_origin=https://guest.example.com trek_public_origin=https://trek.example.com cookie_path=/
 ```
 
-For Apache, add this **before TREK's final `/` catch-all**:
+The Compose healthcheck queries the internal `/health` endpoint automatically.
+
+## Step 9 — Verify TREK connectivity from the companion
+
+Confirm Docker DNS can resolve the configured TREK service:
+
+```bash
+docker compose exec trek-guest-portal python -c \
+  "import socket; print(socket.gethostbyname('app'))"
+```
+
+If you changed `TREK_HOST`, substitute that name.
+
+A failed lookup normally means `TREK_DOCKER_NETWORK` is wrong or the configured TREK service name is not an alias on that network.
+
+## Step 10 — Configure the reverse proxy
+
+The recommended public URL is:
+
+```text
+https://guest.example.com/
+```
+
+### Apache dedicated guest vhost
+
+A ready-to-edit file is included at `examples/apache-guest-vhost.conf`:
 
 ```apache
-ProxyPass        "/guest-portal/" "http://127.0.0.1:8088/" connectiontimeout=5 timeout=300 retry=0
-ProxyPassReverse "/guest-portal/" "http://127.0.0.1:8088/"
-RedirectMatch 302 ^/guest-portal$ /guest-portal/
+<VirtualHost *:443>
+    ServerName guest.example.com
+
+    SSLEngine on
+    # Your certificate directives.
+
+    ProxyPreserveHost On
+    ProxyPass        "/" "http://127.0.0.1:8088/" connectiontimeout=5 timeout=300 retry=0
+    ProxyPassReverse "/" "http://127.0.0.1:8088/"
+</VirtualHost>
 ```
 
-If the proxy is remote, replace `127.0.0.1` with the specific Docker host address.
+If the reverse proxy is remote, replace `127.0.0.1` with the Docker host address configured by `GUEST_PORTAL_BIND_IP`.
 
-Do not remove TREK's existing `/ws`, `/mcp`, or `/` proxy rules. Rule order matters. See [REVERSE-PROXY.md](REVERSE-PROXY.md).
-
-Reload Apache after a syntax check:
+Validate and reload Apache:
 
 ```bash
 sudo apachectl configtest
 sudo systemctl reload apache2
 ```
 
----
+### Nginx dedicated guest server
 
-## Step 8 — Deploy and verify the companion
+A ready-to-edit file is included at `examples/nginx-guest-server.conf`:
 
-Redeploy the Portainer stack, then:
+```nginx
+server {
+    listen 443 ssl;
+    server_name guest.example.com;
 
-```bash
-docker logs --tail 100 trek-guest-portal
+    # Your TLS certificate directives.
+
+    location / {
+        proxy_pass http://127.0.0.1:8088/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
 ```
 
-A healthy startup resembles:
+For real client-IP logging and Cloudflare handling, follow [REVERSE-PROXY.md](REVERSE-PROXY.md) rather than trusting arbitrary forwarded headers.
 
-```text
-INFO cache.persistent_ready db=/cache/guest-portal.db
-INFO startup version=1.0.4 ...
-INFO integration.aerodatabox configured=True key_source=secret-file
-INFO integration.immich configured=True ...
-INFO integration.persistent_cache enabled=True ...
-```
+## Step 11 — Verify the companion and public endpoint
 
-If optional providers are not configured, their corresponding line may show `configured=False`; the portal can still start.
-
-Public health intentionally reveals only:
+For the default local bind:
 
 ```bash
 curl -s http://127.0.0.1:8088/health
 ```
 
+Expected response:
+
 ```json
-{"ok":true,"version":"1.0.4"}
+{"ok":true,"version":"1.2.2"}
 ```
 
-Then test through the public origin:
+Then verify the HTTPS guest origin:
 
 ```bash
-curl -I https://trek.example.com/guest-portal/
+curl -I https://guest.example.com/
 ```
 
-You should receive `200 OK` and security headers including CSP, `nosniff`, and HSTS when served over HTTPS.
+You should receive `200 OK` with Guest Portal security headers.
 
----
+## Step 12 — Create the native TREK public share
 
-## Step 9 — Create the native TREK public share
+Open the trip in TREK and create its normal public share.
 
-Open the trip in TREK and create its normal public share link.
+Guest Portal uses only data exposed by that native share:
 
-For Guest Portal:
+- Plan requires the map/plan permission.
+- Flights, reservation details, and booking/accommodation entries in the Plan timeline require Bookings sharing.
 
-- **Plan** is based on the native trip share.
-- **Flights and Reservations require TREK's Bookings sharing permission** so the native public response contains transport/reservation data.
+Copy the TREK public share URL.
 
-Copy the normal TREK public share URL.
+## Step 13 — Optional Journey public share
 
----
+For Photos:
 
-## Step 10 — Optional: create a Journey public share for Photos
+1. Link/create the Journey for the trip.
+2. Create a Journey public share.
+3. Enable Gallery on that share.
+4. Copy the Journey public share URL.
 
-If using Photos:
+Immich is not required merely to display Journey photos; it is optional capture-date enrichment.
 
-1. Enable/configure Journey in TREK.
-2. Link/create the Journey for this trip.
-3. Create a Journey public share.
-4. Enable **Gallery** on that share.
-5. Copy the Journey share URL.
+## Step 14 — Configure Guest Portal in the trip
 
-Immich is not required merely to display shared Journey photos. It is used by Guest Portal to resolve original capture dates for Immich-backed assets.
+Open the **Guest Portal** tab inside the TREK trip.
 
----
-
-## Step 11 — Configure Guest Portal inside the trip
-
-Open the new **Guest Portal** tab in the TREK trip.
-
-Enter:
-
-**Guest Portal web address**
+For the recommended dedicated hostname, set **Guest Portal web address** to:
 
 ```text
-/guest-portal/
+https://guest.example.com/
 ```
 
-**TREK Trip Share URL or token**
+Then provide:
 
-Paste the native public trip link from Step 9.
-
-**Journey public share URL or token**
-
-Paste the Journey share from Step 10, or leave blank if Photos are not used.
+- **TREK Trip Share URL or token** — required.
+- **Journey public share URL or token** — optional.
+- **Guest portal title** — optional.
 
 Click **Save Guest Portal** and copy the generated guest link.
 
-The generated owner URL resembles:
+The owner link resembles:
 
 ```text
-https://trek.example.com/guest-portal/#trip=...&journey=...&title=...
+https://guest.example.com/#trip=...&journey=...&title=...
 ```
 
-The native share capabilities are kept after `#`. On first load they are POSTed once in a JSON body to create a short-lived guest session, then removed from the visible browser URL/history.
+The native share capabilities remain after `#` and are POSTed to create an HttpOnly session. The fragment intentionally remains in the address bar so a normal refresh can reconstruct the guest session after a companion restart or cookie loss. The fragment is not included in ordinary HTTP request URLs, but the complete guest URL should still be treated as a bearer credential.
 
----
+## Step 15 — Test guest behavior
 
-## Step 12 — Test from a private/incognito browser
+Test the generated link both:
 
-Use a browser where you are **not signed in to TREK**.
+- in the same browser where TREK is already signed in; and
+- in a private/incognito browser.
 
 Confirm:
 
-- the trip header remains visible when switching tabs;
-- Plan loads Mapbox;
-- clicking a Plan stop moves the map under that stop;
-- the selected point remains framed at approximately a 1 km radius on phone and desktop;
-- Flights and Reservations always appear, even if empty;
-- live flight data appears if AeroDataBox is configured;
-- the Flights countdown shows the next auto refresh;
-- Photos are grouped by date if a Journey share is configured;
-- Immich-backed photos use original capture dates when Immich is configured.
+- the dedicated guest hostname remains open rather than the TREK dashboard;
+- Plan and Mapbox load correctly, with planned stops, flights, bookings, and accommodations merged chronologically by day;
+- selecting a stop moves the map beneath that stop and frames about 1 km;
+- standalone `hotel` bookings appear under Reservations → Accommodations rather than Bookings;
+- Flights and Reservations are visible even when empty;
+- live flight information appears when a provider key is configured;
+- Photos load when a Journey gallery share is configured;
+- Immich-backed photos use original capture dates when Immich is configured;
+- after session creation the address bar no longer contains the native share values.
 
-After the first successful load, the address bar should no longer contain the `#trip=` / `#journey=` values.
+## Step 16 — Verify logging safety
 
----
-
-## Step 13 — Verify logs do not expose bearer tokens
-
-The companion redacts native share tokens in its own logs. Because v1.x uses token-free API URLs after session creation, ordinary reverse-proxy access logs should show routes such as:
-
-```text
-POST /guest-portal/api/session
-GET /guest-portal/api/trip
-GET /guest-portal/api/journey
-GET /guest-portal/api/flights/42
-GET /guest-portal/api/photo-dates
+```bash
+docker compose logs --tail=200 trek-guest-portal
 ```
 
-They should not contain native share-token values in those URLs.
+Normal access routes should look like:
 
----
+```text
+POST /api/session
+GET /api/trip
+GET /api/journey
+GET /api/flights/42
+GET /api/photo-dates
+```
+
+Native TREK/Journey bearer values should not appear in request URLs or normal companion logs. Do not enable request-body logging for `/api/session`, because the initial JSON body contains the native share capabilities.
 
 ## Installation complete
 
-Next read:
+Continue with:
 
-- [CONFIGURATION.md](CONFIGURATION.md) for all settings;
-- [SECURITY.md](../SECURITY.md) before exposing the site publicly;
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) if any provider or map fails.
+- [CONFIGURATION.md](CONFIGURATION.md)
+- [GUEST-ORIGIN.md](GUEST-ORIGIN.md)
+- [REVERSE-PROXY.md](REVERSE-PROXY.md)
+- [LOGGING.md](LOGGING.md)
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+- [SECURITY.md](../SECURITY.md)

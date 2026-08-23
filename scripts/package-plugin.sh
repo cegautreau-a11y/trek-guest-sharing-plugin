@@ -1,12 +1,32 @@
 #!/usr/bin/env sh
+# Build the Admin-uploadable TREK plugin ZIP without deployment-local files.
 set -eu
 cd "$(dirname "$0")/.."
+
 VERSION="$(tr -d '\r\n' < VERSION)"
 mkdir -p dist
 OUT="dist/trek-guest-portal-${VERSION}.zip"
 rm -f "$OUT"
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+mkdir -p "$TMP/client" "$TMP/server" "$TMP/docs"
+
+# Copy the plugin runtime/metadata plus documentation that remains useful when
+# the release ZIP is inspected independently from the GitHub source tree.
+cp plugin/client/index.html "$TMP/client/"
+cp plugin/server/index.js "$TMP/server/"
+cp plugin/trek-plugin.json plugin/package.json plugin/README.md plugin/LICENSE "$TMP/"
+cp SECURITY.md "$TMP/SECURITY.md"
+cp docs/*.md "$TMP/docs/"
+
+# plugin/README.md is nested one directory below docs/ in source but moves to
+# the ZIP root, so make its installation link package-relative.
+sed -i 's#](../docs/#](docs/#g' "$TMP/README.md"
+
 (
-  cd plugin
-  zip -qr "../$OUT" client server trek-plugin.json package.json README.md LICENSE
+  cd "$TMP"
+  zip -qr "$OLDPWD/$OUT" .
 )
+
 echo "$OUT"

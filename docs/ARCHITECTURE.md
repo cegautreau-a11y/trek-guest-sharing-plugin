@@ -1,83 +1,147 @@
 # Architecture
 
+TREK Guest Portal deliberately separates authenticated TREK administration from anonymous guest delivery.
+
 ## Components
 
 ### TREK plugin
 
-The Admin-uploadable `trip-page` plugin:
-
-- runs inside TREK's plugin sandbox;
-- stores per-trip Guest Portal configuration in its own isolated plugin database;
-- requires `db:own` and `db:read:trips`;
-- lets the trip owner paste the native trip share and optional Journey share;
-- produces one owner guest URL.
-
-It does **not** serve the anonymous Guest Portal page from a plugin API route.
-
-### Companion
-
-The companion is the internet-facing read-only presentation layer. It:
-
-- serves the static HTML/CSS/JavaScript guest UI;
-- validates native public shares against TREK;
-- creates short-lived guest sessions;
-- proxies only the public data needed by the guest UI;
-- performs optional server-side Immich and AeroDataBox lookups;
-- stores only its own persistent flight cache.
-
-## Authorization flow
+The plugin runs inside TREK and requests only:
 
 ```text
-owner-generated URL fragment
-  #trip=<native-share>&journey=<native-share>
-                │
-                ▼
-POST /api/session JSON body
-                │
-                ▼
-companion validates TREK trip share
-and optional Journey share
-                │
-                ▼
-random server-side session
-                │
-                ▼
-HttpOnly Secure SameSite=Strict cookie
-                │
-                ▼
-token-free guest API URLs
+db:own
+db:read:trips
 ```
 
-The browser removes the original fragment after a successful session exchange.
+It stores per-trip Guest Portal configuration, including the native TREK share capability, optional Journey share capability, display title and configured guest base URL. It does not serve the anonymous guest application.
 
-## Data sources by tab
+### Companion container
 
-### Plan
+The companion is a small Python HTTP service that:
 
-TREK native public trip share + Mapbox GL JS in the guest browser.
+- serves static guest assets;
+- validates native TREK/Journey public shares through TREK's anonymous endpoints;
+- exchanges share capabilities for memory-only HttpOnly guest sessions;
+- returns authorized trip/Journey data to the browser;
+- proxies authorized Journey media;
+- optionally queries AeroDataBox/adsb.fi for live flight data;
+- optionally queries Immich for original asset capture dates;
+- maintains its own persistent live-flight SQLite cache;
+- emits structured operational logs and browser telemetry.
 
-### Flights
+The companion does not mount or read TREK plugin databases at runtime.
 
-TREK public transport data, optional AeroDataBox live status, optional adsb.fi aircraft data, and Guest Portal's persistent cache.
+## Guest timeline normalization
 
-### Reservations
+The Plan tab is the chronological guest overview. For each shared trip day, the browser merges planned place assignments with shared transport reservations, non-transport bookings, and accommodations. Accommodation ranges are represented on each covered day as check-in, stay, or check-out entries.
 
-TREK public accommodations and non-transport booking data.
+TREK accommodations normally have a linked `hotel` reservation. Guest Portal treats the native accommodation as authoritative and suppresses that linked Hotel record to prevent duplication. A standalone reservation whose type is `hotel` is classified as an accommodation so it appears under **Accommodations** rather than **Bookings**. The dedicated Flights and Reservations tabs remain available for richer detail.
 
-### Photos
+## Docker topology
 
-TREK public Journey gallery data. If an Immich provider/asset ID is present and Immich is configured, the companion retrieves asset metadata server-side to determine original capture dates.
-
-## Runtime mounts
-
-Recommended runtime mounts only:
+The companion is deployed as its own Docker Compose project and attaches to TREK's existing Docker network:
 
 ```text
-public/                  -> /srv/public:ro
-server/                  -> /srv/server:ro
-cache/                   -> /cache:rw
-aerodatabox secret file -> /run/secrets/aerodatabox_api_key:ro
-immich secret file      -> /run/secrets/immich_api_key:ro
+TREK Compose project                  Guest Portal Compose project
+┌──────────────────────┐              ┌──────────────────────────┐
+│ app:3000             │              │ trek-guest-portal:8080   │
+│ alias: app           │◄─────────────│ TREK_HOST=app            │
+└──────────┬───────────┘ shared       └────────────┬─────────────┘
+           │               network                 │
+           └───────────────────────────────────────┘
 ```
 
-TREK databases, uploads, plugin source, and `plugins-data` are not mounted into the long-running public container.
+`TREK_DOCKER_NETWORK` tells the Guest Portal Compose project which existing Docker network to join.
+
+The companion publishes container TCP/8080 as host TCP/8088 on a controlled interface. The HTTPS reverse proxy is the only intended consumer of that published port.
+
+## Browser/session flow
+
+The owner-generated guest URL contains native share capabilities after `#`:
+
+```text
+https://guest.example.com/#trip=...&journey=...
+```
+
+URL fragments are not included in the browser's initial HTTP request. The guest application reads the fragment and sends the values once in a JSON body:
+
+```text
+POST /api/session
+```
+
+The companion validates the native shares with TREK and returns a random session cookie:
+
+```text
+Secure
+HttpOnly
+SameSite=Strict
+```
+
+The browser intentionally keeps the share capabilities in the URL fragment so a refresh can repeat the session exchange if the in-memory session or cookie is gone. The fragment is not included in ordinary HTTP request URLs. Later Guest Portal API requests use only the session cookie:
+
+```text
+GET /api/trip
+GET /api/journey
+GET /api/flights/<reservation-id>
+GET /api/photo-dates
+GET /api/photos/<photo-id>/thumbnail
+GET /api/photos/<photo-id>/original
+```
+
+Sessions are memory-only. A page refresh can reconstruct a session from the retained fragment. Native TREK/Journey share revocation remains authoritative, and the complete owner-generated Guest Portal URL must be protected as a bearer capability.
+
+## Origin separation
+
+Recommended browser origins:
+
+```text
+https://trek.example.com/   authenticated TREK PWA
+https://guest.example.com/  anonymous Guest Portal
+```
+
+The dedicated guest origin isolates TREK's Service Worker, authenticated browser state and host-only cookies from Guest Portal.
+
+`PUBLIC_ORIGIN` identifies the guest browser origin. `TREK_PUBLIC_ORIGIN` identifies the TREK browser origin used for server-side Host/X-Forwarded-Host validation.
+
+## Data boundaries
+
+### Browser receives
+
+- shared trip/Journey data already authorized by native public shares;
+- short-lived/live provider data needed for the guest UI;
+- public Mapbox configuration;
+- media responses authorized by the guest session.
+
+### Browser does not receive
+
+- AeroDataBox API key;
+- Immich API key;
+- TREK plugin database contents;
+- authenticated TREK APIs;
+- raw server-side guest session IDs via JavaScript (cookie is HttpOnly).
+
+## Persistent state
+
+The companion's only normal writable application state is:
+
+```text
+/cache/guest-portal.db
+```
+
+This database stores Guest Portal's live-flight cache. Sessions remain in memory and are intentionally lost on container restart.
+
+Provider secrets are mounted read-only from dedicated host files.
+
+## Optional key extraction
+
+The `tools/` directory contains one-shot administrative helpers that can scan an existing Flight Tracker plugin database while the administrator explicitly runs them. Their purpose is to copy only the provider key into Guest Portal's dedicated secret file. The public companion container is not granted that plugin-data mount.
+
+## Security boundaries
+
+- TREK remains authoritative for public-share validity.
+- The reverse proxy terminates public HTTPS.
+- The companion validates exact browser origin for session-mutating operations.
+- Forwarded client IPs are accepted only from configured trusted proxy CIDRs.
+- Provider keys remain server-side.
+- Browser telemetry is authenticated, same-origin, rate-limited and sanitized.
+- Static file resolution is constrained to `PUBLIC_ROOT`.

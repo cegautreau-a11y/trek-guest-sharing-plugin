@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Guest Portal</title>
   <style>
+    /* Authenticated Admin-plugin presentation; no guest secrets are rendered here. */
     :root { color-scheme:light dark; --bg:#f6f7f9; --surface:#fff; --surface2:#f4f6f8; --text:#171a1f; --muted:#667085; --border:#d9dee7; --accent:#2563eb; --accentText:#fff; --danger:#d92d20; }
     html[data-theme="dark"] { --bg:#0d1117; --surface:#151b23; --surface2:#1b2430; --text:#f1f5f9; --muted:#9aa7b5; --border:#2d3745; }
     *{box-sizing:border-box} body{margin:0;padding:22px;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:900px;margin:auto}.hero{margin-bottom:18px}h1{font-size:27px;margin:0 0 6px}h2{font-size:18px;margin:0 0 10px}.muted,.hint{color:var(--muted)}.hint{font-size:12px}.card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:20px;margin:14px 0;box-shadow:0 8px 30px rgba(0,0,0,.05)}.notice{border-left:3px solid var(--accent);background:var(--surface2);padding:11px 13px;border-radius:9px}.warning{border-left-color:#f79009}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}.field{display:flex;flex-direction:column;gap:6px}.full{grid-column:1/-1}label{font-weight:700}input{width:100%;border:1px solid var(--border);border-radius:10px;background:var(--surface2);color:var(--text);padding:11px 12px;font:inherit;outline:none}input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.15)}button{border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:10px;padding:10px 14px;font:inherit;font-weight:700;cursor:pointer}.primary{background:var(--accent);color:var(--accentText);border-color:transparent}.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:16px}.linkbox{display:flex;gap:8px}.linkbox input{flex:1}.status{display:none;margin-top:12px;padding:10px 12px;border-radius:10px}.status.show{display:block}.status.ok{background:rgba(18,183,106,.14)}.status.err{background:rgba(240,68,56,.14)}code{background:var(--surface2);padding:2px 5px;border-radius:5px}.steps{margin:10px 0 0;padding-left:20px}.steps li{margin:7px 0}@media(max-width:700px){body{padding:14px}.grid{grid-template-columns:1fr}.full{grid-column:auto}.linkbox{flex-direction:column}}
@@ -19,12 +20,12 @@
 
   <section class="card">
     <h2>Guest portal setup</h2>
-    <div class="notice warning"><strong>v1.0.4 security model:</strong> The anonymous portal runs in the hardened companion container, normally reverse-proxied at <code>/guest-portal/</code>. Share tokens stay in the guest-link fragment and are exchanged once for an HttpOnly guest session; subsequent API URLs contain no bearer tokens.</div>
+    <div class="notice warning"><strong>v1.2.2 security model:</strong> The anonymous portal runs in the hardened companion container, preferably on a dedicated guest hostname. Share tokens stay in the guest-link fragment and are exchanged once for an HttpOnly guest session; subsequent API URLs contain no bearer tokens.</div>
     <div class="grid">
       <div class="field full">
         <label for="portalBase">Guest Portal web address</label>
-        <input id="portalBase" type="text" placeholder="/guest-portal/">
-        <div class="hint">Use <code>/guest-portal/</code> when the companion container is reverse-proxied under the same TREK hostname. This is recommended because the portal can call TREK's public APIs same-origin.</div>
+        <input id="portalBase" type="text" placeholder="https://guest.example.com/">
+        <div class="hint">For normal browser use, a dedicated guest origin such as <code>https://guest.example.com/</code> is recommended. TREK is a PWA and a TREK Service Worker on the main application origin can intercept same-origin guest navigation in browsers that already use TREK. A same-origin path such as <code>/guest-portal/</code> remains supported when that is not a concern.</div>
       </div>
       <div class="field full">
         <label for="tripShare">TREK Trip Share URL or token *</label>
@@ -48,11 +49,14 @@
     <h2>Your guest link</h2>
     <div class="linkbox"><input id="guestLink" type="text" readonly><button id="copy">Copy link</button><button id="open">Open</button></div>
     <p class="hint">The TREK/Journey share tokens are kept in the URL <strong>fragment</strong> after <code>#</code>. The browser sends them once in a JSON POST body to establish a Secure, HttpOnly guest session; they are never placed in API request URLs. Anyone who has the original guest URL has the same read-only access as the underlying TREK share links.</p>
+    <div id="originNotice" class="notice warning" hidden><strong>Same TREK origin detected:</strong> this link can be intercepted by TREK's PWA Service Worker in a browser that already uses TREK. For the most reliable guest behavior in the same browser, configure a separate guest hostname that reverse-proxies directly to the companion.</div>
     <div class="notice"><strong>Revocation:</strong> delete/regenerate the normal TREK share link (and Journey share if used). Because the portal intentionally reuses those public permissions, the plugin does not pretend to provide a separate revocation boundary.</div>
   </section>
 </main>
 <script>
 (() => {
+  // TREK iframe bridge state. All messages are pinned to the origin established
+  // by the first trusted trek:context message from the parent frame.
   let context = null;
   let currentPortal = null;
   let seq = 0;
@@ -60,6 +64,7 @@
   const pending = new Map();
   const $ = id => document.getElementById(id);
 
+  // Invoke the authenticated plugin server through TREK's parent-frame bridge.
   function invoke(sub, method='GET', body) {
     return new Promise((resolve,reject) => {
       const requestId = 'gp-' + Date.now() + '-' + (++seq);
@@ -71,18 +76,32 @@
   }
   function notify(level,message){ if(parentOrigin) window.parent.postMessage({type:'trek:notify',level,message},parentOrigin); }
   function openExternal(url){ if(parentOrigin && /^https?:\/\//i.test(String(url||''))) window.parent.postMessage({type:'trek:openExternal',url},parentOrigin); }
+  function openGuest(url){
+    const target=String(url||'');
+    if(!/^https?:\/\//i.test(target)) return;
+    try {
+      const opened=window.open(target,'_blank','noopener,noreferrer');
+      if(opened) return;
+    } catch(_) {}
+    openExternal(target);
+  }
   function status(message,ok){ const el=$('status'); el.textContent=message; el.className='status show '+(ok?'ok':'err'); }
 
+  // Normalize the configured guest origin/path before building an owner link.
   function normalizedBase(value) {
-    const raw=String(value||'').trim()||'/guest-portal/';
+    const raw=String(value||'').trim();
+    if(!raw) return '';
     try {
       const base = new URL(raw, context?.hostOrigin || window.location.href);
+      if(base.protocol!=='https:') return '';
       base.hash=''; base.search='';
       if(!base.pathname.endsWith('/')) base.pathname += '/';
       return base.toString();
     } catch(_) { return ''; }
   }
 
+  // Native share capabilities are placed in the fragment so the initial HTTP
+  // request never exposes them to reverse-proxy request-line logs.
   function guestUrl(portal) {
     if(!portal?.shareToken) return '';
     const base=normalizedBase(portal.portalBase);
@@ -94,11 +113,25 @@
     return base + '#' + h.toString();
   }
 
+  // Refresh the generated link and warn when it shares TREK's PWA origin.
   function render() {
     $('linkCard').hidden=!currentPortal;
-    if(currentPortal) $('guestLink').value=guestUrl(currentPortal);
+    const notice=$('originNotice');
+    if(!currentPortal){ if(notice) notice.hidden=true; return; }
+    const link=guestUrl(currentPortal);
+    $('guestLink').value=link;
+    if(notice){
+      let sameOrigin=false;
+      try {
+        const guestOrigin=new URL(link).origin;
+        const trekOrigin=new URL(context?.hostOrigin || parentOrigin).origin;
+        sameOrigin=guestOrigin===trekOrigin;
+      } catch(_) {}
+      notice.hidden=!sameOrigin;
+    }
   }
 
+  // Read configuration only after TREK supplies the current authenticated trip.
   async function loadConfig() {
     if(!context?.tripId) return;
     try {
@@ -107,11 +140,12 @@
       $('title').value=currentPortal?.title||data.trip?.title||'';
       $('tripShare').value=currentPortal?.shareToken||'';
       $('journeyShare').value=currentPortal?.journeyToken||'';
-      $('portalBase').value=currentPortal?.portalBase||'/guest-portal/';
+      $('portalBase').value=currentPortal?.portalBase||'';
       render();
     } catch(err){ status(err.message||'Unable to load Guest Portal.',false); }
   }
 
+  // Accept bridge messages only from the parent window and the pinned origin.
   window.addEventListener('message',event => {
     if(event.source!==window.parent) return;
     const m=event.data||{};
@@ -130,6 +164,7 @@
     if(m.type==='trek:error'&&pending.has(m.requestId)){ const p=pending.get(m.requestId); pending.delete(m.requestId); p.reject(new Error(m.message||'Plugin request failed')); }
   });
 
+  // Persist sanitized configuration through the authenticated plugin API.
   $('save').addEventListener('click',async()=>{
     if(!context?.tripId) return status('Open this plugin from inside a trip.',false);
     $('save').disabled=true;
@@ -150,11 +185,12 @@
     } catch(err){ status(err.message||'Unable to save.',false); }
     finally{$('save').disabled=false;}
   });
+  // Copy/open operate only on the locally generated owner share link.
   $('copy').addEventListener('click',async()=>{
     try{ await navigator.clipboard.writeText($('guestLink').value); status('Guest link copied.',true); }
     catch(_){ $('guestLink').select(); document.execCommand('copy'); status('Guest link copied.',true); }
   });
-  $('open').addEventListener('click',()=>openExternal($('guestLink').value));
+  $('open').addEventListener('click',()=>openGuest($('guestLink').value));
 })();
 </script>
 </body>

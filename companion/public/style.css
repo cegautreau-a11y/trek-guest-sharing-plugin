@@ -1,3 +1,7 @@
+/* TREK Guest Portal presentation layer. Sections mirror the four guest tabs
+ * and keep responsive/layout behavior documented near the relevant selectors. */
+
+/* Global tokens, reset, page shell and navigation */
 :root {
   --bg: #f4f6fa;
   --surface: #ffffff;
@@ -105,6 +109,26 @@ button { cursor: pointer; }
 .tag { border-radius:999px; background:#f2f4f7; padding:3px 7px; color:#475467; font-size:11px; font-weight:700; }
 .map-link { display:inline-flex; margin-top:7px; font-size:12px; font-weight:750; }
 
+/* Unified Plan timeline: places, transport, bookings and accommodations. */
+.plan-timeline { position:relative; display:grid; gap:2px; overflow:hidden; }
+.plan-timeline::before { content:''; position:absolute; top:14px; bottom:14px; left:32px; width:2px; background:#e4e7ec; z-index:0; }
+.plan-event-card { position:relative; z-index:1; display:grid; grid-template-columns:34px minmax(0,1fr); gap:10px; width:100%; min-width:0; box-sizing:border-box; padding:11px 10px; border-radius:12px; }
+.plan-event-card:not(.place-card) { cursor:default; }
+/* Reservations explicitly attached to a TREK place stay directly beneath that
+   place. The small inset preserves the relationship without sacrificing card
+   width on phones. */
+.plan-event-attached { margin-left:18px; width:calc(100% - 18px); border-left:3px solid #d0d5dd; background:#fcfcfd; }
+.plan-event-body { min-width:0; }
+.plan-event-marker { width:30px; height:30px; display:grid; place-items:center; border-radius:50%; background:#eef4ff; color:#1849a9; border:2px solid #fff; box-shadow:0 0 0 1px #e4e7ec; font-size:12px; font-weight:900; box-sizing:border-box; }
+.plan-event-marker.transport { background:#eff8ff; color:#175cd3; }
+.plan-event-marker.booking { background:#fff4ed; color:#b93815; }
+.plan-event-marker.accommodation { background:#ecfdf3; color:#027a48; }
+.plan-event-top { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px 10px; margin-bottom:4px; }
+.plan-event-time { margin-left:auto; color:var(--accent); font-size:12px; font-weight:850; white-space:nowrap; }
+.plan-event-title { color:#101828; font-size:14px; font-weight:850; line-height:1.3; overflow-wrap:anywhere; }
+.plan-event-meta { margin-top:4px; color:var(--muted); font-size:12px; line-height:1.45; overflow-wrap:anywhere; word-break:break-word; }
+.badge.booking { background:#fff4ed; color:#b93815; }
+
 .gp-marker { border:0!important; background:transparent!important; }
 .gp-marker span { display:grid; place-items:center; width:29px; height:29px; border-radius:50% 50% 50% 8px; transform:rotate(-45deg); background:#2563eb; color:#fff; border:2px solid white; box-shadow:0 3px 9px rgba(15,23,42,.32); font-size:11px; font-weight:900; }
 .gp-marker span b { transform:rotate(45deg); }
@@ -192,7 +216,7 @@ th { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacin
   .card { box-shadow:none; break-inside:avoid; }
 }
 
-/* Mapbox planner parity retained in v0.3.0 */
+/* Mapbox planner and inline itinerary-map layout */
 .map-shell { isolation:isolate; }
 #map.mapboxgl-map, .mapboxgl-map { font-family:inherit; }
 .mapboxgl-canvas { outline:none; }
@@ -212,6 +236,7 @@ th { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacin
 .mapboxgl-marker { will-change:transform; }
 .mapboxgl-ctrl-attrib { font-size:10px; }
 
+/* Journey photo date groups and media gallery */
 .photo-date-group { margin:0 0 28px; }
 .photo-date-heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin:0 2px 11px; padding-bottom:8px; border-bottom:1px solid var(--border); }
 .photo-date-heading h3 { margin:0; font-size:17px; letter-spacing:-.015em; }
@@ -225,7 +250,7 @@ th { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacin
   .photo-date-heading { align-items:flex-start; }
 }
 
-/* v0.3.0 — Flights, reservations and mobile guest experience */
+/* Flights, reservations and mobile guest experience */
 body { overflow-x:hidden; padding-left:env(safe-area-inset-left); padding-right:env(safe-area-inset-right); }
 .nav { scroll-snap-type:x proximity; -webkit-overflow-scrolling:touch; }
 .nav button { min-height:48px; scroll-snap-align:start; touch-action:manipulation; }
@@ -259,7 +284,6 @@ body { overflow-x:hidden; padding-left:env(safe-area-inset-left); padding-right:
 .transport-facts { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:1px; border-top:1px solid var(--border); border-bottom:1px solid var(--border); background:var(--border); }
 .transport-facts > span { background:var(--surface-alt); padding:10px 12px; min-width:0; overflow-wrap:anywhere; }
 .transport-facts b { display:block; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.055em; margin-bottom:3px; }
-.confirmation { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-weight:800; letter-spacing:.02em; overflow-wrap:anywhere; }
 .flight-leg-summary { padding:11px 18px; display:flex; flex-wrap:wrap; gap:6px; border-bottom:1px solid var(--border); }
 .flight-leg-summary .tag { background:#eef4ff; color:#1849a9; }
 .transport-notes { margin:0; padding:12px 18px 15px; color:#475467; font-size:13px; line-height:1.5; white-space:pre-wrap; }
@@ -307,6 +331,7 @@ body { overflow-x:hidden; padding-left:env(safe-area-inset-left); padding-right:
 .aircraft-facts { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:4px 9px; text-align:right; }
 .tracker-errors { margin-top:8px; display:grid; gap:4px; color:#b42318; font-size:10px; }
 
+/* Reservation cards and accommodation grouping */
 .reservation-sections { display:grid; gap:26px; }
 .subsection-title { display:flex; align-items:center; gap:8px; margin:0 0 11px; }
 .subsection-title h3 { margin:0; font-size:17px; }
@@ -355,6 +380,13 @@ body { overflow-x:hidden; padding-left:env(safe-area-inset-left); padding-right:
   .day-head { padding:14px; }
   .place-list { padding:5px; }
   .place-card { padding:10px 8px; }
+  .plan-timeline::before { left:24px; }
+  .plan-event-card { grid-template-columns:30px minmax(0,1fr); gap:8px; padding:10px 8px; }
+  .plan-event-attached { margin-left:8px; width:calc(100% - 8px); }
+  .plan-event-marker,.place-number { width:28px; height:28px; }
+  .plan-event-top { align-items:flex-start; }
+  .plan-event-title { font-size:13.5px; }
+  .plan-event-meta { font-size:11.5px; }
 
   .transport-head { padding:14px 14px 10px; }
   .transport-icon { width:38px; height:38px; border-radius:10px; font-size:19px; }
@@ -397,6 +429,9 @@ body { overflow-x:hidden; padding-left:env(safe-area-inset-left); padding-right:
   .tracker-details { grid-template-columns:1fr 1fr; gap:5px; }
   .reservation-card .kv { grid-template-columns:1fr; gap:2px; padding:7px 0; }
   .reservation-card .kv .k { font-size:10px; text-transform:uppercase; letter-spacing:.05em; }
+  .plan-event-top { display:grid; grid-template-columns:minmax(0,1fr) auto; }
+  .plan-event-top .badge { min-width:0; width:max-content; max-width:100%; overflow-wrap:anywhere; }
+  .plan-event-time { margin-left:0; }
   .photo-date-group .gallery { gap:6px; }
 }
 

@@ -1,6 +1,6 @@
 # Logging and observability
 
-TREK Guest Portal v1.0.4 provides full operational logging for the guest-facing system without logging bearer share tokens, API keys, cookies, passwords, confirmation numbers, email addresses, or phone numbers.
+TREK Guest Portal v1.2.2 provides full operational logging for the guest-facing system without logging bearer share tokens, API keys, cookies, passwords, confirmation numbers, email addresses, or phone numbers.
 
 ## Log streams
 
@@ -14,38 +14,36 @@ No separate logging service is required.
 ## Viewing logs
 
 ```bash
-docker logs --tail 200 -f trek-guest-portal
+docker compose logs --tail=200 -f trek-guest-portal
 ```
 
-In Portainer: **Containers → trek-guest-portal → Logs**.
-
-For Admin-plugin events:
+For Admin-plugin events, read the TREK application container's log using the command appropriate to the TREK deployment. For example:
 
 ```bash
-docker logs --tail 200 -f trek
+docker logs --tail 200 -f <TREK_CONTAINER>
 ```
 
 ## Recommended full logging configuration
 
-```yaml
-- LOG_LEVEL=INFO
-- LOG_FORMAT=kv
-- FULL_LOGGING=true
-- LOG_STATIC_REQUESTS=true
-- LOG_SAFE_REQUEST_HEADERS=true
-- CLIENT_EVENT_LOGGING=true
-- CLIENT_EVENT_RATE_PER_MINUTE=240
-- LOG_HEARTBEAT_SECONDS=300
+```dotenv
+LOG_LEVEL=INFO
+LOG_FORMAT=kv
+FULL_LOGGING=true
+LOG_STATIC_REQUESTS=true
+LOG_SAFE_REQUEST_HEADERS=true
+CLIENT_EVENT_LOGGING=true
+CLIENT_EVENT_RATE_PER_MINUTE=240
+LOG_HEARTBEAT_SECONDS=300
 ```
 
 Client IP logging is separate because it is personal data and proxy trust must be configured correctly:
 
-```yaml
-- LOG_CLIENT_IP=true
-- TRUST_PROXY_HEADERS=true
-- CLIENT_IP_HEADER=X-Guest-Client-IP
-- TRUSTED_PROXY_CIDRS=192.0.2.10/32
-- LOG_PROXY_DETAILS=true
+```dotenv
+LOG_CLIENT_IP=true
+TRUST_PROXY_HEADERS=true
+CLIENT_IP_HEADER=X-Guest-Client-IP
+TRUSTED_PROXY_CIDRS=192.0.2.10/32
+LOG_PROXY_DETAILS=true
 ```
 
 Use the actual Apache/Nginx peer IP or CIDR visible to the container. Do not trust Cloudflare IP ranges directly in the application; normalize the client IP at the reverse proxy first. See [REVERSE-PROXY.md](REVERSE-PROXY.md).
@@ -54,8 +52,8 @@ Use the actual Apache/Nginx peer IP or CIDR visible to the container. Do not tru
 
 Human-readable key/value format (default):
 
-```yaml
-- LOG_FORMAT=kv
+```dotenv
+LOG_FORMAT=kv
 ```
 
 Example:
@@ -66,8 +64,8 @@ Example:
 
 JSON format for Loki, Splunk, Elastic, Graylog, Vector, Fluent Bit, etc.:
 
-```yaml
-- LOG_FORMAT=json
+```dotenv
+LOG_FORMAT=json
 ```
 
 Example message body:
@@ -119,7 +117,7 @@ client.event_rate_limited
 
 ## Browser/client events
 
-v1.0.4 introduces a session-protected telemetry endpoint:
+The current release provides a session-protected telemetry endpoint:
 
 ```text
 POST /api/client-log
@@ -247,7 +245,7 @@ cache.persistent_write_failed
 flight.memory_cache_evict
 ```
 
-The persistent Guest Portal cache is separate from TREK and Flight Tracker.
+The persistent live-flight cache belongs to Guest Portal and is separate from TREK and all other plugins.
 
 ## Immich/photo logging
 
@@ -293,8 +291,8 @@ It reports:
 
 Change the interval with:
 
-```yaml
-- LOG_HEARTBEAT_SECONDS=300
+```dotenv
+LOG_HEARTBEAT_SECONDS=300
 ```
 
 Minimum is 60 seconds.
@@ -307,7 +305,7 @@ The TREK plugin logs configuration actions without the actual share tokens:
 Guest Portal config read start trip=1
 Guest Portal config read complete trip=1 configured=true journey=true elapsed_ms=4
 Guest Portal config write start trip=1 has_trip_share=true has_journey_share=true has_portal_base=true
-Guest Portal config write complete trip=1 journey=true portal_base=/guest-portal/ elapsed_ms=7
+Guest Portal config write complete trip=1 journey=true portal_base=https://guest.example.com/ elapsed_ms=7
 ```
 
 These events appear in the TREK `app` container log, not the public companion container.
@@ -332,15 +330,15 @@ Native share tokens that must be referenced in logs are represented by a short S
 
 For temporary diagnosis:
 
-```yaml
-- LOG_LEVEL=DEBUG
+```dotenv
+LOG_LEVEL=DEBUG
 ```
 
 DEBUG includes additional cache hits, internal HTTP server messages, and lower-value provider details. Do not leave DEBUG enabled permanently unless your log retention/storage is sized for it.
 
 ## Log retention
 
-Guest Portal writes to stdout/stderr and relies on Docker's log driver. Configure Docker/Portainer log rotation on production systems. For the `json-file` driver, an example daemon configuration is:
+Guest Portal writes to stdout/stderr and relies on Docker's log driver. Configure Docker log rotation on production systems. For the `json-file` driver, an example daemon configuration is:
 
 ```json
 {

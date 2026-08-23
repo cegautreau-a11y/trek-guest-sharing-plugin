@@ -3,13 +3,13 @@
 Start with:
 
 ```bash
-docker logs --tail 200 trek-guest-portal
+docker compose logs --tail=200 trek-guest-portal
 ```
 
 Temporary deep logging:
 
-```yaml
-- LOG_LEVEL=DEBUG
+```dotenv
+LOG_LEVEL=DEBUG
 ```
 
 Return to `INFO` after troubleshooting.
@@ -18,19 +18,19 @@ Return to `INFO` after troubleshooting.
 
 Set an exact HTTPS origin:
 
-```yaml
-- PUBLIC_ORIGIN=https://trek.example.com
+```dotenv
+PUBLIC_ORIGIN=https://guest.example.com
 ```
 
 Do **not** use:
 
 ```text
-https://trek.example.com/guest-portal/
+https://guest.example.com/guest-portal/
 ```
 
-because `PUBLIC_ORIGIN` must not have a path.
+because `PUBLIC_ORIGIN` must not have a path. For a dedicated guest hostname use `COOKIE_PATH=/`; for the same-origin `/guest-portal/` layout use `PUBLIC_ORIGIN=https://trek.example.com` and `COOKIE_PATH=/guest-portal/`.
 
-## Portainer reports file-vs-directory mount errors
+## Docker Compose reports file-vs-directory mount errors
 
 Example:
 
@@ -69,7 +69,7 @@ curl -I http://127.0.0.1:8088/
 Then test public:
 
 ```bash
-curl -I https://trek.example.com/guest-portal/
+curl -I https://guest.example.com/
 ```
 
 If the first fails, inspect container logs/port mapping. If only the second fails, inspect reverse-proxy rule order and network/firewall access.
@@ -126,7 +126,7 @@ Guest Portal globally serializes provider calls and uses a persistent shared cac
 
 Confirm you have not reduced:
 
-```yaml
+```dotenv
 AERODATABOX_MIN_INTERVAL=1.6
 ```
 
@@ -134,7 +134,7 @@ Also check the provider's current plan quota/rate limit. Multiple unrelated appl
 
 ## Next auto refresh looks wrong
 
-In v1.0.4 the Flights header separates the browser check from the provider schedule:
+In v1.1.0 the Flights header separates the browser check from the provider schedule:
 
 - more than 48 hours out: **Next auto refresh** should be about 10 minutes, while the detail line says when the live-provider window opens;
 - inside 48 hours: the browser checks every minute, but AeroDataBox is only called when the 30m / 5m / 1m provider TTL actually expires;
@@ -149,7 +149,7 @@ flight.refresh_decision ... decision=suppress-aerodatabox ... api_window_open=Fa
 If a flight more than 48 hours away logs `decision=call-aerodatabox`, capture the surrounding events with:
 
 ```bash
-docker logs --since 10m trek-guest-portal | grep -E 'flight\.|aerodatabox\.'
+docker compose logs --since=10m trek-guest-portal | grep -E 'flight\.|aerodatabox\.'
 ```
 
 and include them in a bug report. Full share tokens and API keys should not appear in those logs.
@@ -168,7 +168,7 @@ Without a resolvable Immich date, Guest Portal falls back to Journey entry/photo
 
 ## Guest session required
 
-Sessions are memory-only. They expire and are lost when the companion restarts. Reopen the **original owner-generated Guest Portal URL** containing the fragment to establish a fresh session.
+Sessions are memory-only. They do **not** expire based on time by default (`SESSION_TTL_SECONDS=0`), but they are still lost when the companion restarts/redeploys or when the browser removes the cookie. In v1.2.2 and later the owner-generated fragment remains in the address bar, so simply refreshing an already-open Guest Portal page re-establishes the session. If the fragment is no longer present, reopen the original owner-generated Guest Portal URL.
 
 ## Session origin rejected
 
@@ -177,3 +177,17 @@ The browser's `Origin` must exactly match `PUBLIC_ORIGIN`. Check scheme and host
 ## Plan click does not update map
 
 Hard refresh to ensure the latest `app.js` is loaded. Confirm Mapbox initialized successfully. Selecting a Plan stop should move the single live map below that item and fit a geographic 1 km radius even on phones.
+
+
+## `501 Unsupported method ('{...}GET')` after telemetry 401
+
+This was fixed in v1.1.0. Earlier builds could reject `POST /api/client-log` before consuming its JSON request body. On an HTTP/1.1 keep-alive connection, those unread bytes could be interpreted as the beginning of the next request method. Upgrade the companion to the current release (v1.2.2).
+
+
+## Pasting a share link still shows Guest Portal unavailable
+
+The current release listens for URL-fragment changes. Pasting an original Guest Portal link into an already-open unavailable page re-bootstraps immediately, and because v1.2.2 retains the fragment, a normal refresh of that page can also rebuild the session. Confirm `app.js` and `index.html` are both from the same current release and hard-refresh once after upgrading from an older version.
+
+## Guest link opens the TREK dashboard when I am already signed in
+
+TREK is a PWA and its Service Worker can control navigation on the TREK origin. If the Guest Portal shares that origin, a browser that already uses TREK may let the TREK application handle the navigation before the Guest Portal reaches the network. Use the dedicated guest-origin deployment in [GUEST-ORIGIN.md](GUEST-ORIGIN.md). This uses the same browser and same reverse proxy, but a different hostname such as `guest.example.com`.

@@ -1,6 +1,8 @@
-# TREK Guest Portal v1.0.4 - hardened companion service
-# Recommended: merge this service into the SAME Compose/Portainer stack as
-# TREK's `app` service so TREK_HOST=app resolves on the stack network.
+# TREK Guest Portal v1.2.2
+#
+# This is a standalone Docker Compose project. The companion joins TREK's
+# existing Docker network so TREK_HOST (normally "app") resolves through
+# Docker DNS without merging this service into TREK's Compose project.
 services:
   trek-guest-portal:
     image: python:3.12-alpine
@@ -9,23 +11,41 @@ services:
     read_only: true
     user: "${GUEST_PORTAL_UID:-65532}:${GUEST_PORTAL_GID:-65532}"
 
-    # If Apache/Nginx runs on this Docker host, use 127.0.0.1.
-    # If the reverse proxy is remote, bind to one specific host/LAN IP and
-    # firewall TCP/8088 so only the proxy can reach it.
+    # Bind only to the interface used by the reverse proxy. Keep the default
+    # loopback value when Apache/Nginx is on the same Docker host.
     ports:
       - "${GUEST_PORTAL_BIND_IP:-127.0.0.1}:8088:8080"
 
+    # Join TREK's existing network so TREK_HOST=app can resolve by service name.
+    networks:
+      - trek
+
     environment:
+      # Python/runtime settings.
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
       - LISTEN_PORT=8080
+      - PUBLIC_ROOT=/srv/public
       - TREK_HOST=${TREK_HOST:-app}
       - TREK_PORT=${TREK_PORT:-3000}
-      - PUBLIC_ROOT=/srv/public
-      # REQUIRED: scheme + hostname only. No /guest-portal path.
-      - PUBLIC_ORIGIN=${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN, e.g. https://trek.example.com}
-      - COOKIE_PATH=${COOKIE_PATH:-/guest-portal/}
-      - SESSION_TTL_SECONDS=${SESSION_TTL_SECONDS:-43200}
+      - UPSTREAM_TIMEOUT=${UPSTREAM_TIMEOUT:-20}
+
+      # Browser origins and guest-session cookie scope.
+      # PUBLIC_ORIGIN is required and must be scheme + hostname only.
+      - PUBLIC_ORIGIN=${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN in .env, e.g. https://guest.example.com}
+      # Set TREK_PUBLIC_ORIGIN when the guest site uses a dedicated hostname.
+      # Leave it empty only for a same-origin /guest-portal/ deployment.
+      - TREK_PUBLIC_ORIGIN=${TREK_PUBLIC_ORIGIN:-}
+      - COOKIE_PATH=${COOKIE_PATH:-/}
+
+      # Guest sessions. A zero TTL means no server-side age expiry; sessions
+      # remain memory-only and are invalidated by a container restart/redeploy.
+      - SESSION_TTL_SECONDS=${SESSION_TTL_SECONDS:-0}
+      - SESSION_COOKIE_MAX_AGE_SECONDS=${SESSION_COOKIE_MAX_AGE_SECONDS:-315360000}
       - SESSION_MAX=${SESSION_MAX:-2048}
       - SESSION_CREATE_PER_MINUTE=${SESSION_CREATE_PER_MINUTE:-120}
+
+      # Structured operational logging and browser telemetry.
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-kv}
       - FULL_LOGGING=${FULL_LOGGING:-true}
@@ -33,24 +53,26 @@ services:
       - LOG_SAFE_REQUEST_HEADERS=${LOG_SAFE_REQUEST_HEADERS:-true}
       - CLIENT_EVENT_LOGGING=${CLIENT_EVENT_LOGGING:-true}
       - CLIENT_EVENT_RATE_PER_MINUTE=${CLIENT_EVENT_RATE_PER_MINUTE:-240}
+      - CLIENT_EVENT_MAX_BODY=${CLIENT_EVENT_MAX_BODY:-8192}
       - LOG_HEARTBEAT_SECONDS=${LOG_HEARTBEAT_SECONDS:-300}
-      # Privacy-safe by default. When client IP logging is enabled behind a
-      # reverse proxy, trust only the explicitly configured proxy peer(s).
+
+      # Client-IP logging is disabled until the reverse-proxy trust boundary is
+      # explicitly configured. Never trust forwarded headers from arbitrary peers.
       - LOG_CLIENT_IP=${LOG_CLIENT_IP:-false}
       - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-false}
       - CLIENT_IP_HEADER=${CLIENT_IP_HEADER:-X-Guest-Client-IP}
       - TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS:-}
       - LOG_PROXY_DETAILS=${LOG_PROXY_DETAILS:-true}
 
-      # Flight scheduler. Browser checks and provider calls are separate:
-      # >48h browser checks every 10m but AeroDataBox is not called.
+      # Flight scheduler. Browser polling and live-provider refresh are separate.
       - FLIGHT_API_WINDOW_HOURS=${FLIGHT_API_WINDOW_HOURS:-48}
       - FLIGHT_UPCOMING_POLL_SECONDS=${FLIGHT_UPCOMING_POLL_SECONDS:-600}
       - FLIGHT_ACTIVE_POLL_SECONDS=${FLIGHT_ACTIVE_POLL_SECONDS:-60}
       - FLIGHT_ERROR_POLL_SECONDS=${FLIGHT_ERROR_POLL_SECONDS:-300}
+      - LIVE_FLIGHT_MAX_CACHE=${LIVE_FLIGHT_MAX_CACHE:-256}
 
-      # Live flight integration. An empty secret disables live provider lookup;
-      # scheduled TREK transport cards can still render from the public share.
+      # AeroDataBox/adsb.fi integration. Provider keys are mounted as secret
+      # files below and are intentionally not stored in .env.
       - AERODATABOX_API_KEY_FILE=/run/secrets/aerodatabox_api_key
       - AERODATABOX_TIMEOUT=${AERODATABOX_TIMEOUT:-10}
       - AERODATABOX_MIN_INTERVAL=${AERODATABOX_MIN_INTERVAL:-1.6}
@@ -58,11 +80,11 @@ services:
       - AERODATABOX_429_BACKOFF=${AERODATABOX_429_BACKOFF:-2.5}
       - ADSB_TIMEOUT=${ADSB_TIMEOUT:-8}
 
-      # Guest Portal-owned persistent cache.
+      # Guest Portal-owned persistent live-flight cache.
       - GUEST_CACHE_DB=/cache/guest-portal.db
       - GUEST_CACHE_MAX_ROWS=${GUEST_CACHE_MAX_ROWS:-512}
 
-      # Optional Immich integration for original capture dates.
+      # Optional Immich integration and photo-date metadata enrichment.
       - IMMICH_URL=${IMMICH_URL:-}
       - IMMICH_API_KEY_FILE=/run/secrets/immich_api_key
       - IMMICH_VERIFY_TLS=${IMMICH_VERIFY_TLS:-true}
@@ -72,37 +94,57 @@ services:
       - PHOTO_DATE_CACHE_TTL=${PHOTO_DATE_CACHE_TTL:-21600}
 
     volumes:
+      # Application source is read-only; only cache is writable at runtime.
       - type: bind
-        source: ${GUEST_PORTAL_ROOT:-/opt/trek-guest-portal}/public
+        source: ./public
         target: /srv/public
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${GUEST_PORTAL_ROOT:-/opt/trek-guest-portal}/server
+        source: ./server
         target: /srv/server
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${GUEST_PORTAL_ROOT:-/opt/trek-guest-portal}/cache
+        source: ./cache
         target: /cache
         bind:
           create_host_path: false
+
+      # Empty files are valid when an optional integration is disabled. The
+      # installation guide creates both files before the first compose up.
       - type: bind
-        source: ${GUEST_PORTAL_ROOT:-/opt/trek-guest-portal}/secrets/immich_api_key
+        source: ./secrets/immich_api_key
         target: /run/secrets/immich_api_key
         read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: ${GUEST_PORTAL_ROOT:-/opt/trek-guest-portal}/secrets/aerodatabox_api_key
+        source: ./secrets/aerodatabox_api_key
         target: /run/secrets/aerodatabox_api_key
         read_only: true
         bind:
           create_host_path: false
 
     command: ["python", "/srv/server/server.py"]
+
+    # Use Python's standard library so the base image does not need curl/wget.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3)); raise SystemExit(0 if d.get('ok') else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # Container hardening. The root filesystem is read-only, the process runs
+    # as an unprivileged UID/GID, all Linux capabilities are dropped, and /tmp
+    # is an isolated noexec tmpfs.
     tmpfs:
       - /tmp:noexec,nosuid,nodev,size=16m
     security_opt:
@@ -111,3 +153,10 @@ services:
       - ALL
     pids_limit: 128
     mem_limit: 256m
+
+# The network already exists because TREK is running. Set TREK_DOCKER_NETWORK
+# in .env to the exact network name shown by `docker inspect` / `docker network ls`.
+networks:
+  trek:
+    external: true
+    name: "${TREK_DOCKER_NETWORK:?Set TREK_DOCKER_NETWORK in .env}"

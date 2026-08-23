@@ -12,7 +12,7 @@ The owner-generated Guest Portal URL contains the native TREK/Journey share capa
 2. the companion validates them against TREK;
 3. the companion creates a bounded server-side session;
 4. it sets a random `HttpOnly; Secure; SameSite=Strict` cookie;
-5. the browser removes the original fragment from the visible URL/history;
+5. the browser intentionally retains the original fragment in the address bar so a refresh can establish a fresh session if the in-memory session or cookie is lost;
 6. later APIs contain no native share token in their URL.
 
 Do not configure your reverse proxy to log request bodies for `/guest-portal/api/session`.
@@ -49,14 +49,14 @@ The provided Compose example uses:
 
 ## Known limitations
 
-- Anyone with an unrevoked owner-generated Guest Portal link can establish a read-only guest session because the underlying TREK/Journey share URLs are bearer capabilities.
+- Anyone with an unrevoked owner-generated Guest Portal link can establish a read-only guest session because the underlying TREK/Journey share URLs are bearer capabilities. In v1.2.2 and later the fragment intentionally remains visible in the address bar/browser history so the page can be refreshed; treat screenshots, copied URLs, browser-history exports, and support tickets containing the full link as sensitive.
 - Guest sessions are in-memory and are lost on companion restart.
 - Third-party services receive network requests required to provide enabled features.
 - The project is custom integration code and should be revalidated after major TREK changes.
 
-## Migrating from pre-1.0 builds
+## Migrating from legacy builds
 
-Some 0.3.x builds placed native share tokens in later API URLs. If those builds were used with request-line access logging, historical logs may contain old bearer capabilities. After installing a v1.x build, rotate the native TREK/Journey shares and handle old logs according to your retention policy.
+Legacy Guest Portal builds placed native share tokens in later API URLs. If such a build was used with request-line access logging, historical logs may contain old bearer capabilities. After installing the current release, rotate the native TREK/Journey shares and handle old logs according to your retention policy.
 
 ## Reporting a vulnerability
 

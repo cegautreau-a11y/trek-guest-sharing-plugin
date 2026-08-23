@@ -2,11 +2,32 @@
 
 (() => {
   const app = document.getElementById('app');
-  const fragment = new URLSearchParams(location.hash.replace(/^#/, ''));
-  const shareToken = fragment.get('trip') || '';
-  const journeyToken = fragment.get('journey') || '';
-  const portalTitle = fragment.get('title') || '';
 
+  // Share credentials live only in the URL fragment. Browsers do not reload a
+  // document when only the fragment changes, so these values must be mutable
+  // and re-read when a guest pastes/navigates to an original share URL while
+  // the Guest Portal document is already open.
+  let shareToken = '';
+  let journeyToken = '';
+  let portalTitle = '';
+
+  function readShareFragment() {
+    const fragment = new URLSearchParams(location.hash.replace(/^#/, ''));
+    return {
+      trip: fragment.get('trip') || '',
+      journey: fragment.get('journey') || '',
+      title: fragment.get('title') || '',
+    };
+  }
+
+  function applyShareFragment(value = readShareFragment()) {
+    shareToken = value.trip;
+    journeyToken = value.journey;
+    portalTitle = value.title;
+    return value;
+  }
+
+  applyShareFragment();
   let meta = { title: portalTitle };
   let tripData = null;
   let journeyData = null;
@@ -37,6 +58,7 @@
   // Browser telemetry is session-protected and goes to the same companion
   // container log. It intentionally sends operational metadata only.
   let telemetryReady = false;
+  let telemetryDisabled = false;
   const telemetryQueue = [];
   const telemetryStartedAt = performance.now();
 
@@ -57,11 +79,21 @@
       fetch('api/client-log', {
         method: 'POST', credentials: 'same-origin', cache: 'no-store', keepalive: true,
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item),
+      }).then((res) => {
+        // A companion restart or a manually removed cookie can invalidate an
+        // in-memory session. Stop telemetry immediately on 401 rather than
+        // generating a stream of rejected POSTs.
+        if (res.status === 401) {
+          telemetryReady = false;
+          telemetryDisabled = true;
+          telemetryQueue.length = 0;
+        }
       }).catch(() => {});
     } catch (_) {}
   }
 
   function clientLog(event, fields = {}, level = 'info') {
+    if (telemetryDisabled) return;
     const item = { event, level, fields: cleanTelemetryFields({
       tab: activeTab,
       elapsed_ms: Math.round(performance.now() - telemetryStartedAt),
@@ -78,6 +110,7 @@
   }
 
   function enableTelemetry() {
+    telemetryDisabled = false;
     telemetryReady = true;
     while (telemetryQueue.length) sendClientEvent(telemetryQueue.shift());
   }
@@ -92,6 +125,10 @@
   window.addEventListener('online', () => clientLog('browser.network', { state: 'online' }));
   window.addEventListener('offline', () => clientLog('browser.network', { state: 'offline' }, 'warning'));
   document.addEventListener('visibilitychange', () => clientLog('browser.visibility', { state: document.visibilityState }));
+
+  // -------------------------------------------------------------------------
+  // Safe formatting and tolerant TREK/Journey data normalization
+  // -------------------------------------------------------------------------
 
   function esc(value) {
     return String(value == null ? '' : value)
@@ -248,6 +285,10 @@
     catch (_) { return `${n.toFixed(2)} ${currency || ''}`.trim(); }
   }
 
+  // -------------------------------------------------------------------------
+  // Session-protected companion API access and share-link re-bootstrap
+  // -------------------------------------------------------------------------
+
   async function fetchJson(url) {
     const started = performance.now();
     clientLog('api.request_start', { endpoint: String(url).split('?')[0] });
@@ -263,6 +304,74 @@
     clientLog('api.request_complete', { endpoint: String(url).split('?')[0], status: res.status, api_req: apiReq, elapsed_ms: Math.round(performance.now()-started) });
     return data;
   }
+
+
+  function clearFlightRefreshState() {
+    for (const timer of flightRefreshTimers.values()) clearTimeout(timer);
+    flightRefreshTimers.clear();
+    flightNextRefreshAt.clear();
+    flightNextApiRefreshAt.clear();
+    flightApiWindowOpen.clear();
+    if (flightCountdownTimer) {
+      clearInterval(flightCountdownTimer);
+      flightCountdownTimer = null;
+    }
+  }
+
+  function resetPortalRuntimeForNavigation() {
+    clearFlightRefreshState();
+    try { routeAbortController?.abort(); } catch (_) {}
+    routeAbortController = null;
+    routeRequestSerial += 1;
+    try { if (map && typeof map.remove === 'function') map.remove(); } catch (_) {}
+    map = null;
+    mapReady = false;
+    markerByPlaceId = new Map();
+    selectedPlaceId = null;
+    currentMapPlaces = [];
+    currentDayOrderMap = {};
+    currentRouteCoords = [];
+    tripData = null;
+    journeyData = null;
+    gallery = [];
+    photoCaptureDates = {};
+    activeTab = 'plan';
+    selectedDay = 'all';
+    searchText = '';
+  }
+
+  let loadSerial = 0;
+
+  async function handleShareFragmentNavigation(source = 'hashchange') {
+    const next = readShareFragment();
+    if (!next.trip) return;
+
+    // A same-document fragment navigation must behave like opening the share
+    // link in a fresh tab. This is especially important after a companion
+    // restart, where the old in-memory guest session is gone but the document
+    // itself may still be sitting on the friendly unavailable page.
+    clientLog('portal.share_navigation', {
+      source,
+      has_share_fragment: true,
+      has_journey_fragment: !!next.journey,
+    });
+    applyShareFragment(next);
+    meta = { title: portalTitle };
+    telemetryDisabled = false;
+    telemetryReady = false;
+    resetPortalRuntimeForNavigation();
+    app.innerHTML = '<div class="initial-loader"><div class="spinner"></div><div>Loading trip…</div></div>';
+    await load({ fragmentApplied: true, source });
+  }
+
+  window.addEventListener('hashchange', () => { handleShareFragmentNavigation('hashchange').catch(() => {}); });
+  window.addEventListener('pageshow', (event) => {
+    // Back/forward cache can restore the document without executing the script
+    // again. If the restored URL contains a share fragment, re-bootstrap it.
+    if (event.persisted && readShareFragment().trip) {
+      handleShareFragmentNavigation('pageshow').catch(() => {});
+    }
+  });
 
 
 async function establishGuestSession() {
@@ -281,20 +390,30 @@ async function establishGuestSession() {
   }
   enableTelemetry();
   clientLog('session.established', { has_journey: !!journeyToken, api_req: res.headers.get('X-Guest-Request-ID') || '' });
-  // The native TREK/Journey bearer tokens are needed only once. After the
-  // companion has issued its HttpOnly guest-session cookie, remove them from
-  // the visible URL and browser history entry. Refreshes continue using the
-  // session cookie; the original owner-generated share URL remains the link to distribute.
-  try { history.replaceState(null, document.title, `${location.pathname}${location.search}`); } catch (_) {}
+  // Keep the original share fragment in the address bar after the session is
+  // established. The fragment is not included in HTTP request URLs, but it is
+  // required to reconstruct the guest session after a refresh, companion
+  // restart, cookie loss, or a browser restoring the page without its cookie.
+  // Anyone who can copy the full URL therefore has the same read-only bearer
+  // access as the underlying TREK/Journey public shares.
 }
 
-async function load() {
-  clientLog('portal.load_start', { has_share_fragment: !!shareToken, has_journey_fragment: !!journeyToken });
+async function load(options = {}) {
+  const serial = ++loadSerial;
+  if (!options.fragmentApplied) {
+    const current = readShareFragment();
+    if (current.trip) {
+      applyShareFragment(current);
+      meta = { title: portalTitle };
+    }
+  }
+  clientLog('portal.load_start', { has_share_fragment: !!shareToken, has_journey_fragment: !!journeyToken, source: options.source || 'startup' });
   try {
     if (shareToken) await establishGuestSession();
     const tripPromise = fetchJson('api/trip');
     const journeyPromise = fetchJson('api/journey').catch(() => null);
     const data = await Promise.all([tripPromise, journeyPromise]);
+    if (serial !== loadSerial) return;
     tripData = data[0];
     journeyData = data[1] || null;
     gallery = journeyData?.permissions?.share_gallery ? buildChronologicalGallery(journeyData, photoCaptureDates) : [];
@@ -303,14 +422,15 @@ async function load() {
     selectTab('plan');
     enrichPhotoCaptureDates();
   } catch (err) {
+    if (serial !== loadSerial) return;
     clientLog('portal.load_failed', { message: String(err?.message || 'load failed').slice(0,180) }, 'error');
-    const missing = !shareToken ? ' Open the original Guest Portal share link again.' : '';
+    const missing = !shareToken ? ' Open the original Guest Portal share link again.' : ' Refresh this page to retry the retained guest link.';
     fatal(`This guest portal could not be loaded. ${err.message || ''}${missing}`);
   }
 }
 
 function fatal(message) {
-    app.innerHTML = `<div class="fatal"><h2>Guest Portal unavailable</h2><div>${esc(message)}</div><small>The trip owner may need to refresh the underlying TREK share link in Guest Portal settings.</small></div>`;
+    app.innerHTML = `<div class="fatal"><h2>Guest Portal unavailable</h2><div>${esc(message)}</div><small>If this address still contains the guest share fragment, refresh the page to reconnect. Otherwise open or paste the original Guest Portal share link. The trip owner may also need to refresh the underlying TREK share link in Guest Portal settings.</small></div>`;
   }
 
   async function enrichPhotoCaptureDates() {
@@ -332,6 +452,10 @@ function fatal(message) {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Guest shell, tab selection and common TREK reservation classification
+  // -------------------------------------------------------------------------
+
   function tripTitle() {
     return text(meta?.title, tripData?.trip?.title, journeyData?.journey?.title, 'Shared trip');
   }
@@ -350,15 +474,34 @@ function fatal(message) {
     return asArray(tripData?.reservations).filter(isTransportReservation);
   }
 
+  function linkedAccommodationReservationIds() {
+    return new Set(asArray(tripData?.accommodations)
+      .map(a => a?.reservation_id)
+      .filter(v => v != null)
+      .map(String));
+  }
+
+  function hotelReservations() {
+    const linkedIds = linkedAccommodationReservationIds();
+    return asArray(tripData?.reservations).filter(r =>
+      reservationType(r) === 'hotel' && !linkedIds.has(String(r?.id))
+    );
+  }
+
+  function accommodationItems() {
+    // TREK normally exposes a distinct accommodation plus its linked Hotel
+    // reservation. Keep the accommodation and suppress that linked duplicate,
+    // but treat any standalone Hotel reservation as accommodation too.
+    return [...asArray(tripData?.accommodations), ...hotelReservations()];
+  }
+
   function nonTransportReservations() {
-    const accommodations = asArray(tripData?.accommodations);
-    const linkedReservationIds = new Set(accommodations.map(a => a?.reservation_id).filter(v => v != null).map(String));
     return asArray(tripData?.reservations).filter(r => {
       if (isTransportReservation(r)) return false;
-      // TREK accommodations auto-create a partner Hotel reservation. Suppress only
-      // when the public payload gives us an explicit link, so the lodging card is
-      // not duplicated while unrelated Hotel reservations remain visible.
-      if (reservationType(r) === 'hotel' && linkedReservationIds.has(String(r.id))) return false;
+      // Hotels belong in the Accommodations section. Linked Hotel records are
+      // represented by their native accommodation; standalone Hotel records are
+      // added by accommodationItems().
+      if (reservationType(r) === 'hotel') return false;
       return true;
     });
   }
@@ -367,7 +510,7 @@ function fatal(message) {
     const p = tripData?.permissions || {};
     const transports = transportReservations();
     const reservations = nonTransportReservations();
-    const accommodations = asArray(tripData?.accommodations);
+    const accommodations = accommodationItems();
     const defs = [{ id: 'plan', label: 'Plan', show: true }];
     defs.push({ id: 'flights', label: 'Flights', show: true, count: transports.length });
     defs.push({ id: 'reservations', label: 'Reservations', show: true, count: reservations.length + accommodations.length });
@@ -476,16 +619,20 @@ function fatal(message) {
     });
   }
 
+  // -------------------------------------------------------------------------
+  // Plan / itinerary rendering and Mapbox lifecycle
+  // -------------------------------------------------------------------------
+
   function renderPlan(content) {
     const shared = !!tripData?.permissions?.share_map;
-    clientLog('plan.render', { shared, days: asArray(tripData?.days).length });
+    clientLog('plan.render', { shared, days: asArray(tripData?.days).length, transports: transportReservations().length, reservations: nonTransportReservations().length, accommodations: accommodationItems().length });
     content.innerHTML = `
       <h2 class="section-title">Trip plan</h2>
-      <p class="section-lead">Explore the itinerary and map together. Select a day or a stop to focus the map.</p>
+      <p class="section-lead">A single chronological view of planned stops, flights, bookings and accommodations. Select a stop to focus the map.</p>
       ${shared ? `
         <div class="plan-toolbar">
           <div class="day-chips" id="dayChips"></div>
-          <input class="search" id="placeSearch" type="search" placeholder="Search itinerary…" aria-label="Search itinerary">
+          <input class="search" id="placeSearch" type="search" placeholder="Search timeline…" aria-label="Search trip timeline">
         </div>
         <div class="plan-layout">
           <div class="itinerary" id="itinerary"></div>
@@ -567,6 +714,424 @@ function fatal(message) {
     return true;
   }
 
+  function clockSortMinutes(value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+    const match = raw.match(/(?:T|^)(\d{1,2}):(\d{2})/);
+    if (match) return (Number(match[1]) * 60) + Number(match[2]);
+    const d = dateObject(value);
+    if (!d) return null;
+    return (d.getHours() * 60) + d.getMinutes();
+  }
+
+  function reservationStartValue(r) {
+    const first = orderedEndpoints(r)[0] || {};
+    return text(r?.reservation_time, r?.start_time, r?.start_date, r?.date, first.local_time, first.local_date);
+  }
+
+  function reservationEndValue(r) {
+    const eps = orderedEndpoints(r);
+    const last = eps[eps.length - 1] || {};
+    return text(r?.reservation_end_time, r?.end_time, r?.end_date, last.local_time, last.local_date);
+  }
+
+  function reservationDayId(r) {
+    const meta = parseMeta(r);
+    const first = orderedEndpoints(r)[0] || {};
+    return text(r?.day_id, r?.start_day_id, meta.day_id, meta.start_day_id, first.day_id);
+  }
+
+  function reservationBelongsToDay(r, day) {
+    const explicitDay = reservationDayId(r);
+    if (explicitDay) return String(explicitDay) === String(day?.id);
+    const start = reservationStartValue(r);
+    const reservationDate = dateKey(start);
+    const dayDate = dateKey(day?.date);
+    return !!reservationDate && !!dayDate && reservationDate === dayDate;
+  }
+
+  function assignmentStartValue(a) {
+    const p = a?.place || {};
+    return text(a?.assignment_time, a?.start_time, p?.place_time, p?.start_time);
+  }
+
+  function assignmentEndValue(a) {
+    const p = a?.place || {};
+    return text(a?.assignment_end_time, a?.end_time, p?.end_time);
+  }
+
+  function orderedDayAssignments(dayId) {
+    return assignmentListForDay(dayId)
+      .map((assignment, originalIndex) => ({ assignment, originalIndex }))
+      .sort((x, y) => {
+        const xo = num(x.assignment?.order_index, x.assignment?.sort_order, x.assignment?.order, x.originalIndex) ?? x.originalIndex;
+        const yo = num(y.assignment?.order_index, y.assignment?.sort_order, y.assignment?.order, y.originalIndex) ?? y.originalIndex;
+        return xo - yo;
+      });
+  }
+
+  function reservationAssignmentId(r) {
+    const meta = parseMeta(r);
+    return text(r?.assignment_id, meta.assignment_id);
+  }
+
+  function reservationPlaceId(r) {
+    const meta = parseMeta(r);
+    return text(r?.place_id, meta.place_id);
+  }
+
+  function reservationDayPlanPosition(r, day) {
+    const meta = parseMeta(r);
+    const positions = r?.day_positions ?? meta.day_positions;
+    if (positions && typeof positions === 'object' && !Array.isArray(positions)) {
+      const byDay = positions?.[day?.id] ?? positions?.[String(day?.id)];
+      const n = num(byDay);
+      if (n != null) return n;
+    }
+    const explicitDay = reservationDayId(r);
+    if (!explicitDay || String(explicitDay) === String(day?.id)) {
+      return num(r?.day_plan_position, meta.day_plan_position);
+    }
+    return null;
+  }
+
+  function assignmentIndexForReservation(r, assignments) {
+    const assignmentId = reservationAssignmentId(r);
+    if (assignmentId) {
+      const idx = assignments.findIndex(x => String(x.assignment?.id) === String(assignmentId));
+      if (idx >= 0) return idx;
+    }
+    const placeId = reservationPlaceId(r);
+    if (placeId) {
+      const idx = assignments.findIndex(x => String(x.assignment?.place_id ?? x.assignment?.place?.id) === String(placeId));
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  }
+
+  function normalizeLocationMatch(value) {
+    return String(value ?? '')
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  function endpointMatchesAssignment(endpoint, assignment) {
+    if (!endpoint || !assignment) return false;
+    const p = assignment?.place || {};
+    const endpointCode = normalizeLocationMatch(endpoint?.code);
+    const endpointName = normalizeLocationMatch(endpoint?.name);
+    const placeName = normalizeLocationMatch(text(p?.name, p?.title));
+    const placeText = normalizeLocationMatch([p?.name, p?.title, p?.address, p?.description].filter(Boolean).join(' '));
+
+    // Airport codes are the strongest text signal and are commonly included in
+    // a TREK place name such as "Toronto Pearson (YYZ)".
+    if (endpointCode.length >= 3) {
+      const words = new Set(placeText.split(/\s+/).filter(Boolean));
+      if (words.has(endpointCode)) return true;
+    }
+    if (endpointName.length >= 4 && placeName.length >= 4 &&
+        (placeName.includes(endpointName) || endpointName.includes(placeName))) return true;
+
+    // Coordinates are a fallback for airport places whose display name does not
+    // contain the IATA code. Keep the radius tight to avoid matching a city-wide
+    // place to a nearby airport by accident.
+    const eLat = num(endpoint?.lat, endpoint?.latitude);
+    const eLng = num(endpoint?.lng, endpoint?.lon, endpoint?.longitude);
+    const pLat = num(p?.lat, p?.latitude);
+    const pLng = num(p?.lng, p?.lon, p?.longitude);
+    if ([eLat,eLng,pLat,pLng].every(Number.isFinite)) {
+      const toRad = x => x * Math.PI / 180;
+      const dLat = toRad(pLat - eLat);
+      const dLng = toRad(pLng - eLng);
+      const a = Math.sin(dLat/2) ** 2 + Math.cos(toRad(eLat)) * Math.cos(toRad(pLat)) * Math.sin(dLng/2) ** 2;
+      const km = 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      if (km <= 5) return true;
+    }
+    return false;
+  }
+
+  function timeBasedPlanSlot(value, assignments) {
+    const minutes = clockSortMinutes(value);
+    if (minutes == null) return null;
+    const timed = assignments
+      .map((x, index) => ({ index, minutes:clockSortMinutes(assignmentStartValue(x.assignment)) }))
+      .filter(x => x.minutes != null)
+      .sort((a,b) => a.minutes - b.minutes);
+    if (!timed.length) return null;
+    const next = timed.find(x => x.minutes > minutes);
+    if (!next) return (timed[timed.length - 1].index * 100) + 75;
+    const previous = [...timed].reverse().find(x => x.minutes <= minutes);
+    if (!previous) return (next.index * 100) - 50;
+    if (previous.index === next.index) return (previous.index * 100) + 50;
+    return ((previous.index + next.index) / 2) * 100;
+  }
+
+  function transportPlanAnchor(r, assignments, day) {
+    const linkedIndex = assignmentIndexForReservation(r, assignments);
+    if (linkedIndex >= 0) {
+      return { slot:(linkedIndex * 100) + 15, attached:true, assignmentIndex:linkedIndex, reason:'assignment-link' };
+    }
+
+    const eps = orderedEndpoints(r);
+    const first = eps[0] || {};
+    const last = eps[eps.length - 1] || {};
+    const fromIndex = assignments.findIndex(x => endpointMatchesAssignment(first, x.assignment));
+    const toIndex = assignments.findIndex(x => endpointMatchesAssignment(last, x.assignment));
+    if (fromIndex >= 0 && toIndex >= 0) {
+      // A flight is a movement away from the departure airport, so place it
+      // immediately after that stop. The arrival airport then naturally
+      // follows the flight in the day plan.
+      const slot = (fromIndex * 100) + 50;
+      return { slot, attached:false, assignmentIndex:fromIndex, reason:'endpoint-pair' };
+    }
+    if (fromIndex >= 0) return { slot:(fromIndex * 100) + 50, attached:false, assignmentIndex:fromIndex, reason:'departure-endpoint' };
+    if (toIndex >= 0) return { slot:(toIndex * 100) - 50, attached:false, assignmentIndex:toIndex, reason:'arrival-endpoint' };
+
+    const explicitPosition = reservationDayPlanPosition(r, day);
+    if (explicitPosition != null) return { slot:explicitPosition * 100, attached:false, assignmentIndex:-1, reason:'day-position' };
+
+    const timeSlot = timeBasedPlanSlot(reservationStartValue(r), assignments);
+    if (timeSlot != null) return { slot:timeSlot, attached:false, assignmentIndex:-1, reason:'time' };
+    return { slot:(assignments.length * 100) + 100, attached:false, assignmentIndex:-1, reason:'fallback' };
+  }
+
+  function reservationPlanAnchor(r, assignments, day) {
+    const linkedIndex = assignmentIndexForReservation(r, assignments);
+    if (linkedIndex >= 0) {
+      return { slot:(linkedIndex * 100) + 15, attached:true, assignmentIndex:linkedIndex, reason:'assignment-link' };
+    }
+    const explicitPosition = reservationDayPlanPosition(r, day);
+    if (explicitPosition != null) return { slot:explicitPosition * 100, attached:false, assignmentIndex:-1, reason:'day-position' };
+    const timeSlot = timeBasedPlanSlot(reservationStartValue(r), assignments);
+    if (timeSlot != null) return { slot:timeSlot, attached:false, assignmentIndex:-1, reason:'time' };
+    return { slot:(assignments.length * 100) + 100, attached:false, assignmentIndex:-1, reason:'fallback' };
+  }
+
+  function accommodationMeta(a) {
+    return parseMeta(a);
+  }
+
+  function accommodationCheckIn(a) {
+    const meta = accommodationMeta(a);
+    return text(a?.check_in, a?.checkin, a?.reservation_time, a?.start_time, a?.start_date, meta.check_in, meta.checkin);
+  }
+
+  function accommodationCheckOut(a) {
+    const meta = accommodationMeta(a);
+    return text(a?.check_out, a?.checkout, a?.reservation_end_time, a?.end_time, a?.end_date, meta.check_out, meta.checkout);
+  }
+
+  function accommodationStartDayId(a) {
+    const meta = accommodationMeta(a);
+    return text(a?.start_day_id, a?.check_in_day_id, a?.day_id, meta.start_day_id, meta.check_in_day_id, meta.day_id);
+  }
+
+  function accommodationEndDayId(a) {
+    const meta = accommodationMeta(a);
+    return text(a?.end_day_id, a?.check_out_day_id, meta.end_day_id, meta.check_out_day_id);
+  }
+
+  function accommodationTitle(a) {
+    const meta = accommodationMeta(a);
+    return text(a?.place_name, a?.title, a?.name, meta.place_name, meta.hotel_name, 'Accommodation');
+  }
+
+  function accommodationAddress(a) {
+    const meta = accommodationMeta(a);
+    return text(a?.place_address, a?.address, a?.location, meta.address, meta.location);
+  }
+
+  function accommodationCoversDay(a, day) {
+    const days = asArray(tripData?.days);
+    const dayIndex = days.findIndex(d => String(d?.id) === String(day?.id));
+    const startId = accommodationStartDayId(a);
+    const endId = accommodationEndDayId(a) || startId;
+    const startIndex = startId ? days.findIndex(d => String(d?.id) === String(startId)) : -1;
+    const endIndex = endId ? days.findIndex(d => String(d?.id) === String(endId)) : -1;
+    if (dayIndex >= 0 && startIndex >= 0) {
+      const upper = endIndex >= startIndex ? endIndex : startIndex;
+      return dayIndex >= startIndex && dayIndex <= upper;
+    }
+    const startDate = dateKey(accommodationCheckIn(a));
+    const endDate = dateKey(accommodationCheckOut(a)) || startDate;
+    const currentDate = dateKey(day?.date);
+    if (!startDate || !currentDate) return false;
+    return currentDate >= startDate && currentDate <= endDate;
+  }
+
+  function accommodationTimelineEventsForDay(a, day) {
+    const events = [];
+    if (!accommodationCoversDay(a, day)) return events;
+    const currentId = String(day?.id ?? '');
+    const currentDate = dateKey(day?.date);
+    const startId = accommodationStartDayId(a);
+    const endId = accommodationEndDayId(a);
+    const startDate = dateKey(accommodationCheckIn(a));
+    const endDate = dateKey(accommodationCheckOut(a));
+    const isCheckIn = startId ? currentId === String(startId) : (!!currentDate && !!startDate && currentDate === startDate);
+    const isCheckOut = endId ? currentId === String(endId) : (!!currentDate && !!endDate && currentDate === endDate);
+    if (isCheckIn) events.push({ action:'Check-in', timeValue:accommodationCheckIn(a) });
+    // Every covered day strictly between arrival and departure gets an
+    // all-day Stay card. Same-day stays still produce only Check-in/Check-out.
+    if (!isCheckIn && !isCheckOut) events.push({ action:'Stay', timeValue:'' });
+    if (isCheckOut) events.push({ action:'Check-out', timeValue:accommodationCheckOut(a) });
+    return events;
+  }
+
+  function timelineSearchMatches(kind, item) {
+    const q = searchText.toLowerCase().trim();
+    if (!q) return true;
+    if (kind === 'place') {
+      const p = item?.place || {};
+      return [p.name,p.address,p.description,p.category?.name,item?.notes].some(v => String(v || '').toLowerCase().includes(q));
+    }
+    const meta = parseMeta(item);
+    return [
+      reservationType(item), item?.title, item?.name, item?.location, item?.address,
+      item?.place_name, item?.place_address, item?.notes, item?.description,
+      meta.provider, meta.operator, meta.airline, meta.flight_number, meta.location,
+      accommodationTitle(item), accommodationAddress(item)
+    ].some(v => String(v || '').toLowerCase().includes(q));
+  }
+
+  function planTimelineEventsForDay(day) {
+    const events = [];
+    let fallbackOrder = 0;
+    const assignments = orderedDayAssignments(day.id);
+    assignments.forEach((entry, index) => {
+      const assignment = entry.assignment;
+      if (!timelineSearchMatches('place', assignment)) return;
+      events.push({
+        kind:'place', item:assignment, placeIndex:index,
+        minutes:clockSortMinutes(assignmentStartValue(assignment)),
+        slot:index * 100, attached:false, fallbackOrder:fallbackOrder++,
+      });
+    });
+
+    if (tripData?.permissions?.share_bookings !== false) {
+      transportReservations().forEach(r => {
+        if (!reservationBelongsToDay(r, day) || !timelineSearchMatches('transport', r)) return;
+        const anchor = transportPlanAnchor(r, assignments, day);
+        events.push({
+          kind:'transport', item:r, minutes:clockSortMinutes(reservationStartValue(r)),
+          slot:anchor.slot, attached:anchor.attached, anchorReason:anchor.reason,
+          fallbackOrder:fallbackOrder++,
+        });
+      });
+      nonTransportReservations().forEach(r => {
+        if (!reservationBelongsToDay(r, day) || !timelineSearchMatches('reservation', r)) return;
+        const anchor = reservationPlanAnchor(r, assignments, day);
+        events.push({
+          kind:'reservation', item:r, minutes:clockSortMinutes(reservationStartValue(r)),
+          slot:anchor.slot, attached:anchor.attached, anchorReason:anchor.reason,
+          fallbackOrder:fallbackOrder++,
+        });
+      });
+      accommodationItems().forEach(a => {
+        if (!timelineSearchMatches('accommodation', a)) return;
+        accommodationTimelineEventsForDay(a, day).forEach(boundary => {
+          const anchor = reservationPlanAnchor(a, assignments, day);
+          let slot = anchor.slot;
+          const timeSlot = timeBasedPlanSlot(boundary.timeValue, assignments);
+          if (boundary.action === 'Stay' && !anchor.attached) slot = -25;
+          else if (!anchor.attached && timeSlot != null) slot = timeSlot;
+          // Check-in and Check-out remain separate boundary events. Intermediate
+          // Stay cards are all-day context and sort above timed stops/events.
+          events.push({
+            kind:'accommodation', item:a, action:boundary.action,
+            minutes:boundary.action === 'Stay' ? -1 : clockSortMinutes(boundary.timeValue), slot,
+            attached:anchor.attached, anchorReason:anchor.reason,
+            fallbackOrder:fallbackOrder++,
+          });
+        });
+      });
+    }
+
+    return events.sort((a,b) => {
+      const as = num(a.slot) ?? Number.MAX_SAFE_INTEGER;
+      const bs = num(b.slot) ?? Number.MAX_SAFE_INTEGER;
+      if (as !== bs) return as - bs;
+      const am = a.minutes == null ? -1 : a.minutes;
+      const bm = b.minutes == null ? -1 : b.minutes;
+      if (am !== bm) return am - bm;
+      return a.fallbackOrder - b.fallbackOrder;
+    });
+  }
+
+
+  function timelineMarker(kind) {
+    const labels = { transport:'→', reservation:'•', accommodation:'▰' };
+    return labels[kind] || '•';
+  }
+
+  function planTransportTimelineCard(r, event = {}) {
+    const type = reservationType(r) || 'transport';
+    const meta = parseMeta(r);
+    const eps = orderedEndpoints(r);
+    const first = eps[0] || {}, last = eps[eps.length - 1] || {};
+    const start = reservationStartValue(r);
+    const end = reservationEndValue(r);
+    const from = text(first.code, first.name, meta.departure_airport, meta.pickup_location);
+    const to = text(last.code, last.name, meta.arrival_airport, meta.return_location);
+    const flight = type === 'flight' ? text(meta.flight_number, meta.flightNumber) : '';
+    const airline = type === 'flight' ? text(meta.airline, meta.airline_name) : '';
+    const title = text(r?.title, [airline,flight].filter(Boolean).join(' '), type === 'flight' ? 'Flight' : 'Transport');
+    const metaParts = [];
+    if (from || to) metaParts.push(`${from || '—'} → ${to || '—'}`);
+    if (end) metaParts.push(`Arrives ${formatReservationDateTime(end)}`);
+    return `<article class="plan-event-card plan-event-${attr(type)}${event.attached ? ' plan-event-attached' : ''}">
+      <div class="plan-event-marker transport" aria-hidden="true">${esc(type === 'flight' ? '✈' : timelineMarker('transport'))}</div>
+      <div class="plan-event-body">
+        <div class="plan-event-top"><span class="badge">${esc(type)}</span>${start ? `<span class="plan-event-time">${esc(formatTime(start))}</span>` : ''}</div>
+        <div class="plan-event-title">${esc(title)}</div>
+        ${metaParts.length ? `<div class="plan-event-meta">${metaParts.map(esc).join(' • ')}</div>` : ''}
+      </div>
+    </article>`;
+  }
+
+  function planReservationTimelineCard(r, event = {}) {
+    const type = reservationType(r) || 'booking';
+    const meta = parseMeta(r);
+    const start = reservationStartValue(r);
+    const location = text(r?.location,r?.address,meta.location,meta.address);
+    const metaParts = [location].filter(Boolean);
+    return `<article class="plan-event-card plan-event-booking${event.attached ? ' plan-event-attached' : ''}">
+      <div class="plan-event-marker booking" aria-hidden="true">${timelineMarker('reservation')}</div>
+      <div class="plan-event-body">
+        <div class="plan-event-top"><span class="badge booking">${esc(type)}</span>${start ? `<span class="plan-event-time">${esc(formatTime(start))}</span>` : ''}</div>
+        <div class="plan-event-title">${esc(text(r?.title,r?.name,'Booking'))}</div>
+        ${metaParts.length ? `<div class="plan-event-meta">${metaParts.map(esc).join(' • ')}</div>` : ''}
+      </div>
+    </article>`;
+  }
+
+  function planAccommodationTimelineCard(a, action, event = {}) {
+    const checkIn = accommodationCheckIn(a);
+    const checkOut = accommodationCheckOut(a);
+    const address = accommodationAddress(a);
+    const time = action === 'Check-out' ? checkOut : (action === 'Check-in' ? checkIn : '');
+    const metaParts = [address].filter(Boolean);
+    return `<article class="plan-event-card plan-event-accommodation${event.attached ? ' plan-event-attached' : ''}">
+      <div class="plan-event-marker accommodation" aria-hidden="true">${timelineMarker('accommodation')}</div>
+      <div class="plan-event-body">
+        <div class="plan-event-top"><span class="badge accommodation">${esc(action)}</span>${time ? `<span class="plan-event-time">${esc(formatTime(time))}</span>` : ''}</div>
+        <div class="plan-event-title">${esc(accommodationTitle(a))}</div>
+        ${metaParts.length ? `<div class="plan-event-meta">${metaParts.map(esc).join(' • ')}</div>` : ''}
+      </div>
+    </article>`;
+  }
+
+  function planTimelineEventCard(event) {
+    if (event.kind === 'place') return placeCard(event.item, event.placeIndex);
+    if (event.kind === 'transport') return planTransportTimelineCard(event.item, event);
+    if (event.kind === 'reservation') return planReservationTimelineCard(event.item, event);
+    if (event.kind === 'accommodation') return planAccommodationTimelineCard(event.item, event.action, event);
+    return '';
+  }
+
   function renderItinerary() {
     const holder = document.getElementById('itinerary');
     if (!holder) return;
@@ -579,18 +1144,18 @@ function fatal(message) {
     if (!days.length) { holder.innerHTML = `<div class="card empty">No itinerary days are shared.</div>`; return; }
 
     holder.innerHTML = days.map(day => {
-      const assignments = filteredAssignments(day.id);
+      const events = planTimelineEventsForDay(day);
       const rawNotes = tripData?.dayNotes?.[day.id] || tripData?.dayNotes?.[String(day.id)] || [];
       const notes = Array.isArray(rawNotes) ? rawNotes : (rawNotes ? [rawNotes] : []);
       const dayText = text(day.notes, day.description);
       const noteText = notes.map(n => text(n.text,n.content,n.notes,n.note)).filter(Boolean).join('\n');
       return `<section class="card day-block">
         <div class="day-head">
-          <div class="day-title-row"><div><h3>${esc(dayLabel(day))}</h3><div class="day-date">${esc(formatDate(day.date))}</div></div><span class="badge">${assignments.length} stop${assignments.length===1?'':'s'}</span></div>
+          <div class="day-title-row"><div><h3>${esc(dayLabel(day))}</h3><div class="day-date">${esc(formatDate(day.date))}</div></div><span class="badge">${events.length} item${events.length===1?'':'s'}</span></div>
           ${(dayText || noteText) ? `<div class="day-note">${esc([dayText,noteText].filter(Boolean).join('\n'))}</div>` : ''}
         </div>
-        <div class="place-list">
-          ${assignments.length ? assignments.map((a,i) => placeCard(a,i)).join('') : `<div class="empty" style="padding:20px">${searchText ? 'No stops match your search.' : 'No planned stops.'}</div>`}
+        <div class="place-list plan-timeline">
+          ${events.length ? events.map(planTimelineEventCard).join('') : `<div class="empty" style="padding:20px">${searchText ? 'No timeline items match your search.' : 'No planned stops, flights, bookings or accommodations.'}</div>`}
         </div>
       </section>`;
     }).join('');
@@ -609,13 +1174,13 @@ function fatal(message) {
 
   function placeCard(a, index) {
     const p = a.place || {};
-    const time = [formatTime(p.place_time), formatTime(p.end_time)].filter(Boolean).join(' – ');
+    const time = [formatTime(assignmentStartValue(a)), formatTime(assignmentEndValue(a))].filter(Boolean).join(' – ');
     const category = text(p.category?.name, p.category_name);
     const metaParts = [category, p.address].filter(Boolean);
     const tags = Array.isArray(p.tags) ? p.tags : [];
-    return `<article class="place-card" data-place="${attr(p.id)}">
+    return `<article class="place-card plan-event-card" data-place="${attr(p.id)}">
       <div class="place-number">${index + 1}</div>
-      <div>
+      <div class="plan-event-body">
         <div class="place-top"><div class="place-name">${esc(text(p.name,'Unnamed stop'))}</div>${time ? `<div class="place-time">${esc(time)}</div>` : ''}</div>
         ${metaParts.length ? `<div class="place-meta">${metaParts.map(esc).join(' • ')}</div>` : ''}
         ${p.description ? `<div class="place-desc">${esc(p.description)}</div>` : ''}
@@ -1202,6 +1767,10 @@ function fatal(message) {
   }
 
 
+  // -------------------------------------------------------------------------
+  // Flights: reservation normalization, provider status and refresh scheduling
+  // -------------------------------------------------------------------------
+
   function parseMeta(r) {
     let m = r?.metadata ?? r?.meta ?? {};
     if (typeof m === 'string') { try { m = JSON.parse(m || '{}'); } catch (_) { m = {}; } }
@@ -1235,8 +1804,11 @@ function fatal(message) {
 
   function formatReservationDateTime(value) {
     if (!value) return '';
+    const raw = String(value).trim();
+    // Accommodation check-in/check-out fields can be clock-only values.
+    if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(raw)) return formatTime(raw);
     const date = formatDate(value, { weekday:'short', month:'short', day:'numeric', year:'numeric' });
-    const time = String(value).match(/\d{1,2}:\d{2}/) ? formatTime(value) : '';
+    const time = raw.match(/\d{1,2}:\d{2}/) ? formatTime(value) : '';
     return [date,time].filter(Boolean).join(' · ');
   }
 
@@ -1258,7 +1830,6 @@ function fatal(message) {
     const first = eps[0] || {}, last = eps[eps.length-1] || {};
     const start = text(r.reservation_time, first.local_time);
     const end = text(r.reservation_end_time, last.local_time);
-    const confirmation = text(r.confirmation_code,r.confirmation_number,r.confirmation,r.booking_reference,r.reference);
     const routeFrom = text(first.code, first.name, m.departure_airport, m.pickup_location);
     const routeTo = text(last.code, last.name, m.arrival_airport, m.return_location);
     const notes = text(r.notes,r.description);
@@ -1275,7 +1846,6 @@ function fatal(message) {
       <div class="transport-facts">
         ${start ? `<div><span>Departure</span><strong>${esc(formatReservationDateTime(start))}</strong></div>` : ''}
         ${end ? `<div><span>Arrival</span><strong>${esc(formatReservationDateTime(end))}</strong></div>` : ''}
-        ${confirmation ? `<div><span>Confirmation</span><strong class="confirmation">${esc(confirmation)}</strong></div>` : ''}
         ${text(r.location) ? `<div><span>Location</span><strong>${esc(r.location)}</strong></div>` : ''}
       </div>
       ${flightLegs.length > 1 ? `<div class="flight-leg-summary">${flightLegs.map((l,i) => `<span><b>${i+1}</b>${esc([l.flight,[l.from,l.to].filter(Boolean).join(' → ')].filter(Boolean).join(' · '))}</span>`).join('')}</div>` : ''}
@@ -1417,7 +1987,7 @@ function fatal(message) {
       clientLog('flights.refresh_start', { reservation_id: id });
       const payload = await fetchJson(`api/flights/${encodeURIComponent(r.id)}`);
       if (!document.getElementById(`flight-live-${r.id}`)) return;
-      target.innerHTML = renderFlightTrackerPayload(payload, r);
+      target.innerHTML = renderLiveFlightPayload(payload, r);
       clientLog('flights.refresh_complete', { reservation_id: id, source: payload?._guestLive?.source || payload?.source || 'unknown', api_window_open: payload?._guestLive?.apiWindowOpen !== false, refresh_after: payload?._guestLive?.refreshAfterSeconds ?? null, api_refresh_after: payload?._guestLive?.apiRefreshAfterSeconds ?? null });
       scheduleLiveFlightRefresh(r, payload);
     } catch (err) {
@@ -1449,7 +2019,7 @@ function fatal(message) {
     return 'neutral';
   }
 
-  function trackerLegHtml(leg, idx, total) {
+  function liveFlightLegHtml(leg, idx, total) {
     const s = leg?.status || null;
     const live = leg?.live || null;
     const dep = s?.departure || {};
@@ -1495,16 +2065,20 @@ function fatal(message) {
     </section>`;
   }
 
-  function renderFlightTrackerPayload(payload, reservation) {
+  function renderLiveFlightPayload(payload, reservation) {
     const legs = asArray(payload?.legs);
     const fetched = payload?._guestCache?.fetchedAt || payload?._guestLive?.fetchedAt || payload?.updatedAt;
     const updated = fetched ? new Date(Number(fetched)).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}) : '';
     const age = Number(payload?._guestCache?.ageSeconds);
     const stale = Number.isFinite(age) && age > Math.max(1800, Number(payload?._guestLive?.ttlSeconds || 0));
-    if (payload?.applicable === false) return '<div class="live-unavailable"><strong>Flight Tracker</strong><span>This reservation is not recognized as a flight.</span></div>';
-    if (!legs.length) return `<div class="live-unavailable"><strong>Flight Tracker</strong><span>${esc(asArray(payload?.errors)[0] || 'No current flight data is cached yet.')}</span></div>`;
-    return `<div class="tracker-wrap"><div class="tracker-bar"><div><strong>Flight Tracker</strong><span>${payload?._guestLive?.configured ? 'Live flight information' : (payload?.source ? esc(payload.source) : 'Flight information')}</span></div><div class="tracker-updated ${stale ? 'stale' : ''}">${updated ? `Updated ${esc(updated)}` : ''}${stale ? ' · cached' : ''}</div></div>${legs.map((l,i)=>trackerLegHtml(l,i,legs.length)).join('')}${asArray(payload?.errors).length ? `<div class="tracker-errors">${asArray(payload.errors).slice(0,2).map(e=>`<span>${esc(e)}</span>`).join('')}</div>` : ''}</div>`;
+    if (payload?.applicable === false) return '<div class="live-unavailable"><strong>Live flight</strong><span>This reservation is not recognized as a flight.</span></div>';
+    if (!legs.length) return `<div class="live-unavailable"><strong>Live flight</strong><span>${esc(asArray(payload?.errors)[0] || 'No current flight data is cached yet.')}</span></div>`;
+    return `<div class="tracker-wrap"><div class="tracker-bar"><div><strong>Live flight</strong><span>${payload?._guestLive?.configured ? 'Live flight information' : (payload?.source ? esc(payload.source) : 'Flight information')}</span></div><div class="tracker-updated ${stale ? 'stale' : ''}">${updated ? `Updated ${esc(updated)}` : ''}${stale ? ' · cached' : ''}</div></div>${legs.map((l,i)=>liveFlightLegHtml(l,i,legs.length)).join('')}${asArray(payload?.errors).length ? `<div class="tracker-errors">${asArray(payload.errors).slice(0,2).map(e=>`<span>${esc(e)}</span>`).join('')}</div>` : ''}</div>`;
   }
+
+  // -------------------------------------------------------------------------
+  // Non-transport reservations and accommodations
+  // -------------------------------------------------------------------------
 
   function reservationCard(r) {
     const type = reservationType(r) || 'reservation';
@@ -1512,42 +2086,45 @@ function fatal(message) {
     const title = text(r.title,r.name,'Reservation');
     const start = text(r.reservation_time,r.start_time,r.start_date,r.date);
     const end = text(r.reservation_end_time,r.end_time,r.end_date);
-    const confirmation = text(r.confirmation_code,r.confirmation_number,r.confirmation,r.booking_reference,r.reference);
     const location = text(r.location,r.address,meta.location,meta.address);
     const notes = text(r.notes,r.description);
     const rows=[];
     if(start) rows.push(['When',formatReservationDateTime(start)]);
     if(end) rows.push(['Ends',formatReservationDateTime(end)]);
     if(location) rows.push(['Location',location]);
-    if(confirmation) rows.push(['Confirmation',confirmation]);
     const provider=text(meta.provider,r.provider,r.operator,r.company);
     if(provider) rows.push(['Provider',provider]);
-    return `<article class="card reservation-card"><div class="reservation-card-head"><span class="badge">${esc(type)}</span>${statusBadge(r.status)}</div><h3>${esc(title)}</h3><div class="reservation-kvs">${rows.map(([k,v])=>`<div class="kv"><div class="k">${esc(k)}</div><div class="${k==='Confirmation'?'confirmation':''}">${esc(v)}</div></div>`).join('')}</div>${notes?`<div class="reservation-notes">${esc(notes)}</div>`:''}</article>`;
+    return `<article class="card reservation-card"><div class="reservation-card-head"><span class="badge">${esc(type)}</span>${statusBadge(r.status)}</div><h3>${esc(title)}</h3><div class="reservation-kvs">${rows.map(([k,v])=>`<div class="kv"><div class="k">${esc(k)}</div><div>${esc(v)}</div></div>`).join('')}</div>${notes?`<div class="reservation-notes">${esc(notes)}</div>`:''}</article>`;
   }
 
   function accommodationCard(a) {
-    const title = text(a.place_name,a.title,a.name,'Accommodation');
-    const checkIn = text(a.check_in,a.checkin,a.start_time,a.start_date);
-    const checkOut = text(a.check_out,a.checkout,a.end_time,a.end_date);
-    const confirmation = text(a.confirmation,a.confirmation_number,a.booking_reference,a.reference);
-    const address = text(a.place_address,a.address,a.location);
-    const notes = text(a.notes,a.description);
+    const meta = accommodationMeta(a);
+    const title = accommodationTitle(a);
+    const checkIn = accommodationCheckIn(a);
+    const checkOut = accommodationCheckOut(a);
+    const address = accommodationAddress(a);
+    const notes = text(a.notes,a.description,meta.notes);
+    const provider = text(meta.provider,a.provider,a.operator,a.company);
     const rows=[];
     if(checkIn) rows.push(['Check-in',formatReservationDateTime(checkIn)]);
     if(checkOut) rows.push(['Check-out',formatReservationDateTime(checkOut)]);
     if(address) rows.push(['Address',address]);
-    if(confirmation) rows.push(['Confirmation',confirmation]);
-    return `<article class="card reservation-card accommodation-card"><div class="reservation-card-head"><span class="badge accommodation">Accommodation</span>${statusBadge(a.status || 'confirmed')}</div><h3>${esc(title)}</h3><div class="reservation-kvs">${rows.map(([k,v])=>`<div class="kv"><div class="k">${esc(k)}</div><div class="${k==='Confirmation'?'confirmation':''}">${esc(v)}</div></div>`).join('')}</div>${notes?`<div class="reservation-notes">${esc(notes)}</div>`:''}</article>`;
+    if(provider) rows.push(['Provider',provider]);
+    return `<article class="card reservation-card accommodation-card"><div class="reservation-card-head"><span class="badge accommodation">Accommodation</span>${statusBadge(a.status || 'confirmed')}</div><h3>${esc(title)}</h3><div class="reservation-kvs">${rows.map(([k,v])=>`<div class="kv"><div class="k">${esc(k)}</div><div>${esc(v)}</div></div>`).join('')}</div>${notes?`<div class="reservation-notes">${esc(notes)}</div>`:''}</article>`;
   }
 
   function renderReservations(content) {
-    const reservations = nonTransportReservations().slice().sort((a,b)=>dateSortValue(a.reservation_time||a.start_date)-dateSortValue(b.reservation_time||b.start_date));
-    const accommodations = asArray(tripData?.accommodations).slice().sort((a,b)=>dateSortValue(a.check_in||a.start_date)-dateSortValue(b.check_in||b.start_date));
+    const reservations = nonTransportReservations().slice().sort((a,b)=>dateSortValue(reservationStartValue(a))-dateSortValue(reservationStartValue(b)));
+    const accommodations = accommodationItems().slice().sort((a,b)=>dateSortValue(accommodationCheckIn(a))-dateSortValue(accommodationCheckIn(b)));
     const total = reservations.length + accommodations.length;
     clientLog('reservations.render', { reservations: reservations.length, accommodations: accommodations.length, total });
     content.innerHTML = `<h2 class="section-title">Reservations</h2>
       ${total ? `<div class="reservation-sections">${accommodations.length?`<section><div class="subsection-title"><h3>Accommodations</h3><span>${accommodations.length}</span></div><div class="data-grid reservation-grid">${accommodations.map(accommodationCard).join('')}</div></section>`:''}${reservations.length?`<section><div class="subsection-title"><h3>Bookings</h3><span>${reservations.length}</span></div><div class="data-grid reservation-grid">${reservations.map(reservationCard).join('')}</div></section>`:''}</div>` : '<div class="card empty">No non-transport reservations are shared.</div>'}`;
   }
+
+  // -------------------------------------------------------------------------
+  // Journey photos, date grouping and lightbox media navigation
+  // -------------------------------------------------------------------------
 
   function photoThumb(photo) {
     return `api/photos/${encodeURIComponent(photo.photo_id ?? photo.id)}/thumbnail`;

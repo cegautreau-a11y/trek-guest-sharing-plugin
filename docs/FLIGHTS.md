@@ -1,116 +1,75 @@
 # Flights
 
-## What the tab contains
+Guest Portal renders transport reservations from the native TREK public share. Optional live data is enriched server-side with AeroDataBox and adsb.fi.
 
-The Flights tab contains TREK transportation reservations. Air reservations can additionally show live schedule/status data from AeroDataBox and airborne position data from adsb.fi. Transportation is deliberately excluded from the Reservations tab.
+## Native sharing requirement
 
-## Refresh model
+The TREK public share must enable Bookings. If Bookings are not shared, Guest Portal cannot expose Flights or Reservations.
 
-Guest Portal v1.0.4 separates **browser checks** from **external provider calls**. This is important for AeroDataBox BASIC quotas.
+## Browser checks vs provider calls
 
-### Browser check cadence
+Guest Portal deliberately separates **browser/local checks** from **external provider calls**.
 
-| Flight state | Guest browser check |
-|---|---:|
-| More than 48 hours before departure | 10 minutes |
-| Within 48 hours of departure | 1 minute |
-| Completed / all legs arrived | stopped |
-| Temporary provider error | 5 minutes by default |
+Default scheduling:
 
-A browser check does **not** necessarily call AeroDataBox. Most checks are served from memory or the persistent SQLite cache.
+- more than 48 hours before departure: browser checks every 10 minutes; AeroDataBox is not queried;
+- 12–48 hours: provider data may refresh about every 30 minutes;
+- 3–12 hours: provider data may refresh about every 5 minutes;
+- less than 3 hours: provider data may refresh about every minute;
+- active/boarding/en-route: provider data may refresh about every minute;
+- completed flights: automatic live refreshing stops.
 
-### AeroDataBox call cadence
+The server's cache/provider TTL is authoritative. Multiple guests watching the same flight do not independently consume provider quota each time their browsers poll.
 
-Guest Portal does not call AeroDataBox at all while the best-known departure time is more than 48 hours away.
+## Caches
 
-Once inside the 48-hour live-data window, the provider cache follows the same time-to-departure curve used by Flight Tracker:
+Guest Portal uses:
 
-| State / time to departure | Provider cache TTL |
-|---|---:|
-| More than 48 hours | **No AeroDataBox request** |
-| 12–48 hours | 30 minutes |
-| 3–12 hours | 5 minutes |
-| Less than 3 hours | 1 minute |
-| Boarding / departed / en route / approaching / diverted | 1 minute |
-| Unknown departure time | 5 minutes |
-| Completed / all legs arrived | no continuous refresh |
+1. in-memory cache for hot requests;
+2. its own persistent SQLite cache at `/cache/guest-portal.db` for restart-safe provider reuse.
 
-This means a guest may see **Next auto refresh in 1 minute** while the companion still serves a 20-minute-old provider result because its 30-minute provider TTL has not expired.
+The companion does not read another plugin's cache database at runtime.
 
-## Flights header
+## Flight-number sources
 
-The page shows two timing concepts:
+Flight numbers are derived from the shared TREK reservation metadata/endpoints. Previously normalized Guest Portal cache data may be reused as a reference when available.
 
-- **Next auto refresh** — the next browser/server check.
-- **Live provider window opens in ...** or **Next provider refresh due in ...** — when AeroDataBox may actually be contacted.
+## AeroDataBox secret
 
-For a flight 72 hours away, a typical display is approximately:
+The supplied Compose deployment reads the provider key from:
 
 ```text
-Next auto refresh
-in 10m 0s
-Live provider window opens in 1d 0h 0m
+./secrets/aerodatabox_api_key
 ```
 
-## Provider flow
+inside the container:
 
 ```text
-TREK public share transport
-       │
-       ├── >48h: schedule-only response, no AeroDataBox call
-       │
-       └── <=48h: provider refresh allowed
-                 │
-                 ├── memory cache
-                 ├── persistent Guest Portal SQLite cache
-                 ├── AeroDataBox when provider TTL expires
-                 ├── optional adsb.fi position near/in flight
-                 └── normalized response
+/run/secrets/aerodatabox_api_key
 ```
 
-## Rate-limit protection
+An empty file disables live AeroDataBox lookup.
 
-- one process-wide AeroDataBox request queue;
-- default minimum interval 1.6 seconds;
-- sequential flight-leg lookups;
-- automatic HTTP 429 backoff/retry;
-- persistent cache shared by all guests;
-- browser polling does not bypass provider TTLs;
-- no AeroDataBox calls outside the configured live-data window.
+## adsb.fi
 
-Provider quotas are account-level. Another application using the same API key can still contribute to rate-limit pressure.
+When AeroDataBox returns enough aircraft identity information, Guest Portal may query adsb.fi for current aircraft position/registration/callsign details. adsb.fi failures do not invalidate the underlying scheduled flight card.
 
-## Scheduler settings
+## Error behavior
 
-| Variable | Default | Meaning |
-|---|---:|---|
-| `FLIGHT_API_WINDOW_HOURS` | `48` | Hours before departure when AeroDataBox calls may begin. |
-| `FLIGHT_UPCOMING_POLL_SECONDS` | `600` | Guest check interval before the live window. |
-| `FLIGHT_ACTIVE_POLL_SECONDS` | `60` | Guest check interval inside the live window. |
-| `FLIGHT_ERROR_POLL_SECONDS` | `300` | Retry interval after a temporary live-data failure. |
+Provider failures are logged server-side. The browser receives generic status information rather than raw provider errors. A previously cached Guest Portal payload can be used as a temporary fallback when a refresh fails.
 
-## Persistent cache
+## Configuration
 
-Default:
+See [CONFIGURATION.md](CONFIGURATION.md) for:
 
-```text
-/cache/guest-portal.db
-```
-
-The cache belongs only to Guest Portal and persists normalized provider payloads across container restarts. It does not store AeroDataBox or Immich API keys.
-
-## Diagnosing refresh decisions
-
-At `LOG_LEVEL=INFO`, each flight request produces scheduler events containing fields such as:
-
-```text
-flight.refresh_decision ... decision=suppress-aerodatabox phase=upcoming hours_to_departure=93.4 api_window_open=False api_window_opens_in=163440 api_ttl=7200 api_due_in=163440 poll_after=600
-```
-
-or:
-
-```text
-flight.refresh_decision ... decision=call-aerodatabox phase=active hours_to_departure=20.3 api_window_open=True api_ttl=1800 api_due_in=0 poll_after=60
-```
-
-See [LOGGING.md](LOGGING.md) for the complete logging guide.
+- `FLIGHT_API_WINDOW_HOURS`
+- `FLIGHT_UPCOMING_POLL_SECONDS`
+- `FLIGHT_ACTIVE_POLL_SECONDS`
+- `FLIGHT_ERROR_POLL_SECONDS`
+- `LIVE_FLIGHT_MAX_CACHE`
+- `AERODATABOX_TIMEOUT`
+- `AERODATABOX_MIN_INTERVAL`
+- `AERODATABOX_429_RETRIES`
+- `AERODATABOX_429_BACKOFF`
+- `ADSB_TIMEOUT`
+- `GUEST_CACHE_MAX_ROWS`
