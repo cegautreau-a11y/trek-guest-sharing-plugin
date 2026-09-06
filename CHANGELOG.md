@@ -22,7 +22,7 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ---
 
-## 3.0.1
+## 3.0.3
 
 ### Fixed
 

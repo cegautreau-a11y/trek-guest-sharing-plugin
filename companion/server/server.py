@@ -151,7 +151,7 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.0.1"
+VERSION = "3.0.3"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
