@@ -117,12 +117,107 @@ _AIRPORT_TZ: dict[str, str] = {}
 # Lazy-load flag
 _AIRPORT_TZ_LOADED = False
 
+# Embedded airport timezone data - comprehensive mapping for iCal timezone resolution
+# This data is used to build the SQLite database on first run
+_EMBEDDED_AIRPORT_TZ_DATA = {
+    # Brazil
+    "GRU": "America/Sao_Paulo", "GIG": "America/Sao_Paulo", "CGH": "America/Sao_Paulo",
+    "BSB": "America/Sao_Paulo", "SSA": "America/Bahia", "CWB": "America/Sao_Paulo",
+    "POA": "America/Sao_Paulo", "FLN": "America/Sao_Paulo", "REC": "America/Recife",
+    "FOR": "America/Fortaleza", "MAO": "America/Manaus", "BEL": "America/Belem",
+    "NAT": "America/Recife", "MCZ": "America/Maceio", "JPQ": "America/Sao_Paulo",
+    "NVT": "America/Sao_Paulo", "RBE": "America/Sao_Paulo",
+    # Canada
+    "YYZ": "America/Toronto", "YUL": "America/Montreal",
+    "YVR": "America/Vancouver", "YWG": "America/Winnipeg", "YEG": "America/Edmonton",
+    "YOW": "America/Toronto", "YQB": "America/Toronto", "YTZ": "America/Toronto",
+    "YYC": "America/Edmonton", "YHZ": "America/Halifax", "YQR": "America/Regina",
+    "YXY": "America/Whitehorse",
+    # United States
+    "JFK": "America/New_York", "LAX": "America/Los_Angeles", "ORD": "America/Chicago",
+    "DFW": "America/Chicago", "DEN": "America/Denver", "SFO": "America/Los_Angeles",
+    "SEA": "America/Los_Angeles", "LAS": "America/Los_Angeles", "MCO": "America/New_York",
+    "MIA": "America/New_York", "ATL": "America/New_York", "BOS": "America/New_York",
+    "PHL": "America/New_York", "EWR": "America/New_York", "LGA": "America/New_York",
+    "DCA": "America/New_York", "IAD": "America/New_York", "MSP": "America/Chicago",
+    "DTW": "America/Detroit", "PHX": "America/Phoenix", "IAH": "America/Chicago",
+    "SAN": "America/Los_Angeles", "PDX": "America/Los_Angeles",
+    "AUS": "America/Chicago", "MSY": "America/Chicago", "BWI": "America/New_York",
+    "SLC": "America/Denver", "IND": "America/Indiana/Indianapolis", "CMH": "America/Indiana/Indianapolis",
+    "CLE": "America/New_York", "RIC": "America/New_York", "BNA": "America/Chicago",
+    "RDU": "America/New_York",
+    # Europe
+    "LHR": "Europe/London", "LGW": "Europe/London", "STN": "Europe/London", "LTN": "Europe/London",
+    "CDG": "Europe/Paris", "ORY": "Europe/Paris",
+    "FRA": "Europe/Berlin", "MUC": "Europe/Berlin",
+    "AMS": "Europe/Amsterdam", "MAD": "Europe/Madrid", "BCN": "Europe/Madrid",
+    "FCO": "Europe/Rome", "MXP": "Europe/Rome",
+    "ZRH": "Europe/Zurich", "VIE": "Europe/Vienna", "BRU": "Europe/Brussels",
+    "DUB": "Europe/Dublin", "CPH": "Europe/Copenhagen", "OSL": "Europe/Oslo",
+    "ARN": "Europe/Stockholm", "HEL": "Europe/Helsinki", "WAW": "Europe/Warsaw",
+    "PRG": "Europe/Prague", "BUD": "Europe/Budapest", "ATH": "Europe/Athens",
+    "IST": "Europe/Istanbul",
+    # Asia / Pacific
+    "HND": "Asia/Tokyo", "NRT": "Asia/Tokyo", "KIX": "Asia/Tokyo",
+    "PVG": "Asia/Shanghai", "SHA": "Asia/Shanghai", "PEK": "Asia/Shanghai",
+    "HKG": "Asia/Hong_Kong", "ICN": "Asia/Seoul", "GMP": "Asia/Seoul",
+    "SIN": "Asia/Singapore", "BKK": "Asia/Bangkok", "KUL": "Asia/Kuala_Lumpur",
+    "DEL": "Asia/Kolkata", "BOM": "Asia/Kolkata", "MAA": "Asia/Kolkata",
+    "DXB": "Asia/Dubai", "AUH": "Asia/Dubai", "DOH": "Asia/Qatar",
+    "TLV": "Asia/Jerusalem",
+    "SYD": "Australia/Sydney", "MEL": "Australia/Melbourne", "BNE": "Australia/Brisbane",
+    "PER": "Australia/Perth", "AKL": "Pacific/Auckland",
+    # South / Central America
+    "EZE": "America/Argentina/Buenos_Aires", "AEP": "America/Argentina/Buenos_Aires",
+    "SCL": "America/Santiago", "LIM": "America/Lima", "BOG": "America/Bogota",
+    "MDE": "America/Bogota", "CLO": "America/Bogota", "GYE": "America/Guayaquil",
+    "UIO": "America/Guayaquil", "MEX": "America/Mexico_City", "CUN": "America/Cancun",
+    "GDL": "America/Mexico_City", "MTY": "America/Monterrey", "QRO": "America/Mexico_City",
+    "SAP": "America/Tegucigalpa", "SJO": "America/Costa_Rica", "PTY": "America/Panama",
+    "HAV": "America/Havana", "NAS": "America/Nassau", "KIN": "America/Jamaica",
+    "PUJ": "America/Santo_Domingo", "SDQ": "America/Santo_Domingo", "POP": "America/Santo_Domingo",
+    "GDT": "America/Grand_Turk", "PLS": "America/Grand_Turk", "SXM": "America/Marigot",
+    # Africa
+    "JNB": "Africa/Johannesburg", "CPT": "Africa/Johannesburg", "CAI": "Africa/Cairo",
+    "LOS": "Africa/Lagos", "ACC": "Africa/Accra", "ADD": "Africa/Addis_Ababa",
+    "NBO": "Africa/Nairobi", "DUR": "Africa/Johannesburg", "ABJ": "Africa/Abidjan",
+}
+
+
+def _build_airport_tz_database(db_path: str) -> int:
+    """Build SQLite airport timezone database from embedded data.
+
+    Creates the tools directory if needed and populates the database.
+    Returns the number of airports inserted.
+    """
+    db_dir = os.path.dirname(db_path)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+        logging.info(f"Created tools directory: {db_dir}")
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS airports (
+            iata_code TEXT PRIMARY KEY,
+            timezone TEXT NOT NULL
+        )
+    """)
+    cursor.execute("DELETE FROM airports")
+    for iata_code, timezone in sorted(_EMBEDDED_AIRPORT_TZ_DATA.items()):
+        cursor.execute("INSERT INTO airports (iata_code, timezone) VALUES (?, ?)", (iata_code, timezone))
+    conn.commit()
+    count = cursor.execute("SELECT COUNT(*) FROM airports").fetchone()[0]
+    conn.close()
+    logging.info(f"Built airport timezone database with {count} airports at {db_path}")
+    return count
+
 
 def _load_airport_tz_database() -> dict[str, str]:
     """Load airport timezone mappings from SQLite database.
 
-    The database is built by running: python tools/generate-airport-timezones.py
-    If the database doesn't exist, returns the embedded fallback dict.
+    If the database doesn't exist or is empty, builds it from embedded data.
+    Falls back to embedded dict if database operations fail.
     """
     global _AIRPORT_TZ, _AIRPORT_TZ_LOADED
 
@@ -131,72 +226,11 @@ def _load_airport_tz_database() -> dict[str, str]:
 
     db_path = os.path.join(os.path.dirname(__file__), "..", "..", "tools", "airport_tz.db")
 
-    # Fallback embedded mapping for essential airports (used if DB not available)
-    _AIRPORT_TZ = {
-        # Brazil
-        "GRU": "America/Sao_Paulo", "GIG": "America/Sao_Paulo", "CGH": "America/Sao_Paulo",
-        "BSB": "America/Sao_Paulo", "SSA": "America/Bahia", "CWB": "America/Sao_Paulo",
-        "POA": "America/Sao_Paulo", "FLN": "America/Sao_Paulo", "REC": "America/Recife",
-        "FOR": "America/Fortaleza", "MAO": "America/Manaus", "BEL": "America/Belem",
-        "NAT": "America/Recife", "MCZ": "America/Maceio", "JPQ": "America/Sao_Paulo",
-        "NVT": "America/Sao_Paulo", "RBE": "America/Sao_Paulo",
-        # Canada
-        "YYZ": "America/Toronto", "YUL": "America/Montreal",
-        "YVR": "America/Vancouver", "YWG": "America/Winnipeg", "YEG": "America/Edmonton",
-        "YOW": "America/Toronto", "YQB": "America/Toronto", "YTZ": "America/Toronto",
-        "YYC": "America/Edmonton", "YHZ": "America/Halifax", "YQR": "America/Regina",
-        "YXY": "America/Whitehorse",
-        # United States
-        "JFK": "America/New_York", "LAX": "America/Los_Angeles", "ORD": "America/Chicago",
-        "DFW": "America/Chicago", "DEN": "America/Denver", "SFO": "America/Los_Angeles",
-        "SEA": "America/Los_Angeles", "LAS": "America/Los_Angeles", "MCO": "America/New_York",
-        "MIA": "America/New_York", "ATL": "America/New_York", "BOS": "America/New_York",
-        "PHL": "America/New_York", "EWR": "America/New_York", "LGA": "America/New_York",
-        "DCA": "America/New_York", "IAD": "America/New_York", "MSP": "America/Chicago",
-        "DTW": "America/Detroit", "PHX": "America/Phoenix", "IAH": "America/Chicago",
-        "SAN": "America/Los_Angeles", "PDX": "America/Los_Angeles",
-        "AUS": "America/Chicago", "MSY": "America/Chicago", "BWI": "America/New_York",
-        "SLC": "America/Denver", "IND": "America/Indiana/Indianapolis", "CMH": "America/Indiana/Indianapolis",
-        "CLE": "America/New_York", "RIC": "America/New_York", "BNA": "America/Chicago",
-        "RDU": "America/New_York",
-        # Europe
-        "LHR": "Europe/London", "LGW": "Europe/London", "STN": "Europe/London", "LTN": "Europe/London",
-        "CDG": "Europe/Paris", "ORY": "Europe/Paris",
-        "FRA": "Europe/Berlin", "MUC": "Europe/Berlin",
-        "AMS": "Europe/Amsterdam", "MAD": "Europe/Madrid", "BCN": "Europe/Madrid",
-        "FCO": "Europe/Rome", "MXP": "Europe/Rome",
-        "ZRH": "Europe/Zurich", "VIE": "Europe/Vienna", "BRU": "Europe/Brussels",
-        "DUB": "Europe/Dublin", "CPH": "Europe/Copenhagen", "OSL": "Europe/Oslo",
-        "ARN": "Europe/Stockholm", "HEL": "Europe/Helsinki", "WAW": "Europe/Warsaw",
-        "PRG": "Europe/Prague", "BUD": "Europe/Budapest", "ATH": "Europe/Athens",
-        "IST": "Europe/Istanbul",
-        # Asia / Pacific
-        "HND": "Asia/Tokyo", "NRT": "Asia/Tokyo", "KIX": "Asia/Tokyo",
-        "PVG": "Asia/Shanghai", "SHA": "Asia/Shanghai", "PEK": "Asia/Shanghai",
-        "HKG": "Asia/Hong_Kong", "ICN": "Asia/Seoul", "GMP": "Asia/Seoul",
-        "SIN": "Asia/Singapore", "BKK": "Asia/Bangkok", "KUL": "Asia/Kuala_Lumpur",
-        "DEL": "Asia/Kolkata", "BOM": "Asia/Kolkata", "MAA": "Asia/Kolkata",
-        "DXB": "Asia/Dubai", "AUH": "Asia/Dubai", "DOH": "Asia/Qatar",
-        "TLV": "Asia/Jerusalem",
-        "SYD": "Australia/Sydney", "MEL": "Australia/Melbourne", "BNE": "Australia/Brisbane",
-        "PER": "Australia/Perth", "AKL": "Pacific/Auckland",
-        # South / Central America
-        "EZE": "America/Argentina/Buenos_Aires", "AEP": "America/Argentina/Buenos_Aires",
-        "SCL": "America/Santiago", "LIM": "America/Lima", "BOG": "America/Bogota",
-        "MDE": "America/Bogota", "CLO": "America/Bogota", "GYE": "America/Guayaquil",
-        "UIO": "America/Guayaquil", "MEX": "America/Mexico_City", "CUN": "America/Cancun",
-        "GDL": "America/Mexico_City", "MTY": "America/Monterrey", "QRO": "America/Mexico_City",
-        "SAP": "America/Tegucigalpa", "SJO": "America/Costa_Rica", "PTY": "America/Panama",
-        "HAV": "America/Havana", "NAS": "America/Nassau", "KIN": "America/Jamaica",
-        "PUJ": "America/Santo_Domingo", "SDQ": "America/Santo_Domingo", "POP": "America/Santo_Domingo",
-        "GDT": "America/Grand_Turk", "PLS": "America/Grand_Turk", "SXM": "America/Marigot",
-        # Africa
-        "JNB": "Africa/Johannesburg", "CPT": "Africa/Johannesburg", "CAI": "Africa/Cairo",
-        "LOS": "Africa/Lagos", "ACC": "Africa/Accra", "ADD": "Africa/Addis_Ababa",
-        "NBO": "Africa/Nairobi", "DUR": "Africa/Johannesburg", "ABJ": "Africa/Abidjan",
-    }
+    # Start with embedded fallback
+    _AIRPORT_TZ = _EMBEDDED_AIRPORT_TZ_DATA.copy()
 
     try:
+        # Check if database exists and has data
         if os.path.exists(db_path):
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
@@ -206,11 +240,13 @@ def _load_airport_tz_database() -> dict[str, str]:
 
             if rows:
                 _AIRPORT_TZ = {code: tz for code, tz in rows}
-                logging.info(f"Loaded {len(_AIRPORT_TZ)} airport timezone mappings from database")
+                logging.info(f"Loaded {len(_AIRPORT_TZ)} airport timezone mappings from database at {db_path}")
             else:
-                logging.warning("Airport timezone database is empty, using embedded fallback")
+                logging.info("Airport timezone database is empty, building from embedded data")
+                _build_airport_tz_database(db_path)
         else:
-            logging.warning(f"Airport timezone database not found at {db_path}, using embedded fallback")
+            logging.info(f"Airport timezone database not found at {db_path}, building from embedded data")
+            _build_airport_tz_database(db_path)
     except Exception as e:
         logging.warning(f"Failed to load airport timezone database: {e}, using embedded fallback")
 
