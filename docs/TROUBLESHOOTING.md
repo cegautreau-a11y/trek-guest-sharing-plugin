@@ -168,7 +168,7 @@ Without a resolvable Immich date, Guest Portal falls back to Journey entry/photo
 
 ## Guest session required
 
-Sessions are memory-only. They do **not** expire based on time by default (`SESSION_TTL_SECONDS=0`), but they are still lost when the companion restarts/redeploys or when the browser removes the cookie. In v2.0.5 and later the owner-generated fragment remains in the address bar, so simply refreshing an already-open Guest Portal page re-establishes the session. If the fragment is no longer present, reopen the original owner-generated Guest Portal URL.
+Sessions are memory-only. They do **not** expire based on time by default (`SESSION_TTL_SECONDS=0`), but they are still lost when the companion restarts/redeploys or when the browser removes the cookie. In v2.1.1 and later the owner-generated fragment remains in the address bar, so simply refreshing an already-open Guest Portal page re-establishes the session. If the fragment is no longer present, reopen the original owner-generated Guest Portal URL.
 
 ## Session origin rejected
 
@@ -181,12 +181,12 @@ Hard refresh to ensure the latest `app.js` is loaded. Confirm Mapbox initialized
 
 ## `501 Unsupported method ('{...}GET')` after telemetry 401
 
-This was fixed in v1.1.0. Earlier builds could reject `POST /api/client-log` before consuming its JSON request body. On an HTTP/1.1 keep-alive connection, those unread bytes could be interpreted as the beginning of the next request method. Upgrade the companion to the current release (v2.0.5).
+This was fixed in v1.1.0. Earlier builds could reject `POST /api/client-log` before consuming its JSON request body. On an HTTP/1.1 keep-alive connection, those unread bytes could be interpreted as the beginning of the next request method. Upgrade the companion to the current release (v2.1.1).
 
 
 ## Pasting a share link still shows Guest Portal unavailable
 
-The current release listens for URL-fragment changes. Pasting an original Guest Portal link into an already-open unavailable page re-bootstraps immediately, and because v2.0.5 retains the fragment, a normal refresh of that page can also rebuild the session. Confirm `app.js` and `index.html` are both from the same current release and hard-refresh once after upgrading from an older version.
+The current release listens for URL-fragment changes. Pasting an original Guest Portal link into an already-open unavailable page re-bootstraps immediately, and because v2.1.1 retains the fragment, a normal refresh of that page can also rebuild the session. Confirm `app.js` and `index.html` are both from the same current release and hard-refresh once after upgrading from an older version.
 
 ## Guest link opens the TREK dashboard when I am already signed in
 

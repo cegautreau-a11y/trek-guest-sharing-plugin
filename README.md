@@ -4,7 +4,7 @@
 
 TREK Guest Portal turns TREK's native public trip and Journey shares into a richer guest site without modifying the TREK application image. The project has two components: an Admin-uploadable TREK plugin that stores per-trip share configuration, and a hardened companion container that serves the anonymous guest experience.
 
-**Current release:** `2.0.5`
+**Current release:** `2.1.1`
 **TREK compatibility:** `>=4.0.0 <5.0.0`
 **Deployment:** Docker Compose  
 **License:** MIT
@@ -141,14 +141,14 @@ Existing installations should read [UPGRADING.md](docs/UPGRADING.md) before repl
 A release build produces:
 
 ```text
-trek-guest-portal-2.0.5.zip
-trek-guest-portal-companion-2.0.5.zip
-trek-guest-portal-2.0.5-complete-bundle.zip
+trek-guest-portal-2.1.1.zip
+trek-guest-portal-companion-2.1.1.zip
+trek-guest-portal-2.1.1-complete-bundle.zip
 ```
 
-- `trek-guest-portal-2.0.5.zip` — upload directly through **TREK → Admin → Plugins**.
-- `trek-guest-portal-companion-2.0.5.zip` — extract on the Docker host and deploy with `docker compose`.
-- `trek-guest-portal-2.0.5-complete-bundle.zip` — plugin, companion and repository documentation in one archive.
+- `trek-guest-portal-2.1.1.zip` — upload directly through **TREK → Admin → Plugins**.
+- `trek-guest-portal-companion-2.1.1.zip` — extract on the Docker host and deploy with `docker compose`.
+- `trek-guest-portal-2.1.1-complete-bundle.zip` — plugin, companion and repository documentation in one archive.
 
 `dist/SHA256SUMS` is generated alongside the release artifacts.
 

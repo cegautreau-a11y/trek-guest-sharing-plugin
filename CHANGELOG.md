@@ -22,7 +22,7 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ---
 
-## 2.0.5 - 2026-09-06
+## 2.1.1 - 2026-09-06
 
 ### Added
 
@@ -34,7 +34,7 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ### Validation
 
-- Synchronized active package, runtime, documentation, and cache-busting version markers to 2.0.5.
+- Synchronized active package, runtime, documentation, and cache-busting version markers to 2.1.1.
 
 ---
 
