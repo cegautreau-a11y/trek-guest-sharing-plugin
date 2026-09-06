@@ -65,6 +65,14 @@ button { cursor: pointer; }
 .nav button .count { margin-left:5px; font-size:11px; background:#eaf0ff; padding:2px 6px; border-radius:999px; }
 
 .page { max-width:1440px; margin:0 auto; padding: 26px 24px 60px; }
+.share-warning {
+  max-width: 1440px; margin: 18px auto 0; padding: 16px 18px; border: 1px solid rgba(220, 104, 3, 0.28); background: rgba(255, 246, 237, 0.9); color: #7a3d00; border-radius: 14px; box-shadow: var(--shadow-sm);
+}
+.share-warning strong { display:block; margin-bottom: 8px; font-size: 14px; }
+.share-warning p { margin: 0 0 10px; color: #7a3d00; }
+.share-warning ol { margin: 0; padding-left: 18px; line-height: 1.55; }
+.share-warning li { margin-bottom: 8px; }
+.share-warning li div { margin-top: 3px; }
 .section-title { margin: 0 0 6px; font-size: 25px; letter-spacing:-.025em; }
 .section-lead { color:var(--muted); margin:0 0 20px; }
 .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-sm); }

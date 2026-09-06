@@ -20,6 +20,8 @@ Guest Portal intentionally exposes four sections:
 
 Flights and Reservations remain visible even when empty. Journal, Packing, Budget, Collab, and external "Open in Maps" links are intentionally omitted from the guest view.
 
+> Share reminder: Guest Portal only shows flights, reservations, and photos when the native TREK share permissions are enabled. Make sure Bookings is shared for the trip and Gallery is shared for the Journey before expecting those sections to appear.
+
 Booking confirmation codes, confirmation numbers, booking references, and equivalent reservation reference identifiers are intentionally **not exposed anywhere in the Guest Portal UI or guest `/api/trip` response**.
 
 ## Architecture

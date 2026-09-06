@@ -460,6 +460,25 @@ function fatal(message) {
     return text(meta?.title, tripData?.trip?.title, journeyData?.journey?.title, 'Shared trip');
   }
 
+  function sharePermissionWarnings() {
+    const warnings = [];
+    const tripPermissions = tripData?.permissions || {};
+    const journeyPermissions = journeyData?.permissions || {};
+    if (tripPermissions.share_bookings === false) {
+      warnings.push({
+        title: 'Bookings are not shared for this trip.',
+        detail: 'Open the native TREK trip share settings and turn on Bookings to show flights and reservations.'
+      });
+    }
+    if (journeyPermissions.share_gallery === false) {
+      warnings.push({
+        title: 'Gallery is not shared for this journey.',
+        detail: 'Open the native TREK Journey share settings and turn on Gallery to show photos.'
+      });
+    }
+    return warnings;
+  }
+
   const TRANSPORT_TYPES = new Set(['flight','train','bus','car','taxi','bicycle','cruise','ferry']);
 
   function reservationType(r) {
@@ -526,6 +545,7 @@ function fatal(message) {
     const daysCount = tripData?.days?.length || 0;
     const placesCount = Object.values(tripData?.assignments || {}).reduce((n, a) => n + (Array.isArray(a) ? a.length : 0), 0);
     const cover = safeUrl(trip.cover_image);
+    const sharingWarnings = sharePermissionWarnings();
 
     app.innerHTML = `
       <header class="hero${cover ? ' has-cover' : ''}" id="hero">
@@ -541,6 +561,7 @@ function fatal(message) {
           </div>
         </div>
       </header>
+      ${sharingWarnings.length ? `<div class="share-warning"><strong>Share settings reminder</strong><p>Guest Portal only shows what the native TREK share allows.</p><ol>${sharingWarnings.map(w => `<li><strong>${esc(w.title)}</strong><div>${esc(w.detail)}</div></li>`).join('')}</ol></div>` : ''}
       <div class="nav-wrap"><nav class="nav" id="nav"></nav></div>
       <main class="page" id="content"></main>
       <footer class="footer">Read-only guest view • Shared by the trip owner</footer>

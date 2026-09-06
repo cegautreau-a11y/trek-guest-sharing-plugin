@@ -125,4 +125,6 @@ The trip owner must create a native TREK public share. Guest Portal can only dis
 - Flights, Reservations, and booking/accommodation items shown in the Plan timeline require Bookings sharing.
 - Photos require a Journey public share with Gallery enabled.
 
+Use this as the reminder before publishing a trip: enable Bookings in the native TREK trip share and enable Gallery in the native Journey share. If either is off, the guest portal intentionally hides the corresponding section.
+
 Revoking/regenerating the native TREK/Journey share remains the authoritative way to revoke Guest Portal access.
