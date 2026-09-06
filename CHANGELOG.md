@@ -22,17 +22,25 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ---
 
-## 3.0.0
+## 3.0.1
 
-### Added
+### Fixed
 
-- **iCal / WebCal calendar feed** — Trip owners can enable a calendar feed on the plugin link-generation page. When enabled, the guest portal includes a Calendar tab that exposes a subscription URL compatible with Google Calendar, Apple Calendar, Outlook, and any other WebCal client. Feeds auto-update as the TREK itinerary changes.
+- **Base-path routing**: Fixed iCal feed route when the companion is mounted under a URL prefix (e.g. `/guest-plugin/`). The companion now strips the `GUEST_PLUGIN_PATH` prefix before route matching.
+- **iCal times**: Removed incorrect UTC (`Z`) suffix from iCal datetimes. Times are now emitted as naive local values with `X-WR-TIMEZONE` property. Set `ICAL_TIMEZONE` env var to match the trip's primary timezone.
+- **webcal_url**: The URL returned by `/api/ical-link` now correctly includes the `GUEST_PLUGIN_PATH` prefix.
 
 ### Changed
 
-- Companion server VERSION bumped to 3.0.0.
-- Companion public app.js and config.js cache-busting version bumped to 3.0.0.
-- Plugin version bumped to 3.0.0.
+- Added `GUEST_PLUGIN_PATH` env var (default `/guest-plugin/`). Set this to match the reverse-proxy mount point.
+- Added `ICAL_TIMEZONE` env var (default `UTC`). Set to the IANA timezone of the trip (e.g. `America/New_York`).
+- Companion server VERSION bumped to 3.0.1.
+- Companion public app.js and config.js cache-busting version bumped to 3.0.1.
+- Plugin version bumped to 3.0.1.
+
+---
+
+## 3.0.0
 
 ---
 

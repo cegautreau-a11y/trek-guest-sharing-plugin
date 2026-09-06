@@ -83,6 +83,11 @@ PUBLIC_ORIGIN = os.environ.get("PUBLIC_ORIGIN", "").strip().rstrip("/")
 # hostname to isolate it from TREK's PWA service worker and auth state.
 TREK_PUBLIC_ORIGIN = os.environ.get("TREK_PUBLIC_ORIGIN", "").strip().rstrip("/") or PUBLIC_ORIGIN
 COOKIE_PATH = os.environ.get("COOKIE_PATH", "/guest-portal/").strip() or "/guest-portal/"
+# Base path prefix if the companion is mounted under a URL prefix (e.g. /guest-plugin/).
+# Must start and end with a slash. Empty string means no prefix.
+GUEST_PLUGIN_PATH = os.environ.get("GUEST_PLUGIN_PATH", "/guest-plugin/").strip()
+if not GUEST_PLUGIN_PATH.startswith("/") or not GUEST_PLUGIN_PATH.endswith("/"):
+    GUEST_PLUGIN_PATH = "/guest-plugin/"
 _SESSION_TTL_RAW = int(os.environ.get("SESSION_TTL_SECONDS", "0"))
 # 0 disables server-side time expiration. Positive values retain the optional
 # finite-TTL behavior for deployments that explicitly want it.
@@ -94,6 +99,9 @@ SESSION_COOKIE_MAX_AGE_SECONDS = max(86400, min(int(os.environ.get("SESSION_COOK
 SESSION_MAX = max(32, min(int(os.environ.get("SESSION_MAX", "2048")), 10000))
 SESSION_CREATE_PER_MINUTE = max(10, min(int(os.environ.get("SESSION_CREATE_PER_MINUTE", "120")), 2000))
 SESSION_COOKIE_NAME = "trek_guest_session"
+# Default timezone for the iCal feed's X-WR-TIMEZONE property.  Should match
+# the primary timezone of the trip (e.g. America/New_York, Europe/London).
+ICAL_TIMEZONE = os.environ.get("ICAL_TIMEZONE", "UTC").strip()
 
 # The public companion never mounts or reads TREK plugin databases at runtime.
 # The bundled one-shot helper may be used manually to copy a provider key into
@@ -143,7 +151,7 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.0.0"
+VERSION = "3.0.1"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -1933,13 +1941,19 @@ def _ical_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
 
 def _ical_dt(value: str | None, is_date: bool = False) -> str:
-    """Format a ISO-8601 datetime string as iCal DTSTART/DTEND value."""
+    """Format a ISO-8601 datetime string as iCal DTSTART/DTEND value.
+
+    Times are emitted as naive (timezone-less) values so calendar clients
+    interpret them as the local time of each event's location.  The companion's
+    X-WR-TIMEZONE calendar property (ICAL_TIMEZONE env var) tells clients which
+    timezone to use as the calendar default.
+    """
     if not value:
         return ""
     value = value.replace("Z", "").rstrip("Z")
     if is_date:
         return value[:10].replace("-", "")
-    return value[:15].replace("-", "").replace(":", "") + "Z"
+    return value[:15].replace("-", "").replace(":", "")
 
 def _make_uid(kind: str, item_id: str, trip_id: str | None) -> str:
     safe_id = re.sub(r"[^A-Za-z0-9]", "-", f"{kind}-{item_id}")
@@ -2044,6 +2058,7 @@ def _build_ical_feed(trip_data: dict, session: dict) -> str:
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
+        f"X-WR-TIMEZONE:{ICAL_TIMEZONE}",
     ]
 
     for item in items:
@@ -2691,7 +2706,13 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch_get(self):
         """Dispatch health, authenticated guest APIs and static-file GET/HEAD requests."""
         _begin_log_context(self, self.path)
-        path = urlsplit(self.path).path
+        raw_path = urlsplit(self.path).path
+        # Strip GUEST_PLUGIN_PATH prefix for route matching.
+        path = raw_path
+        if GUEST_PLUGIN_PATH != "/" and raw_path.startswith(GUEST_PLUGIN_PATH):
+            path = raw_path[len(GUEST_PLUGIN_PATH) - 1:]
+            if not path.startswith("/"):
+                path = "/" + path
         if path == "/health":
             return self._send_json(200, {"ok": True, "version": VERSION})
         m = re.fullmatch(r"/ical/([A-Za-z0-9_-]{43,})", path)
@@ -2707,7 +2728,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/ical-link":
                 if not session.get("ical"):
                     return self._send_json(403, {"error": "iCal is not enabled for this portal"})
-                webcal_url = f"{PUBLIC_ORIGIN}/ical/{_sid}"
+                webcal_url = f"{PUBLIC_ORIGIN}{GUEST_PLUGIN_PATH}ical/{_sid}"
                 return self._send_json(200, {"webcal_url": webcal_url})
             if path == "/api/journey":
                 return self._journey_json(session)
@@ -2784,7 +2805,7 @@ def main():
         raise SystemExit("COOKIE_PATH must start and end with /")
     init_guest_cache_db()
     server = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
-    log_event(logging.INFO, "startup", version=VERSION, listen=f"{LISTEN_HOST}:{LISTEN_PORT}", public_root=PUBLIC_ROOT, log_level=LOG_LEVEL, public_origin=PUBLIC_ORIGIN, trek_public_origin=TREK_PUBLIC_ORIGIN, cookie_path=COOKIE_PATH)
+    log_event(logging.INFO, "startup", version=VERSION, listen=f"{LISTEN_HOST}:{LISTEN_PORT}", public_root=PUBLIC_ROOT, log_level=LOG_LEVEL, public_origin=PUBLIC_ORIGIN, trek_public_origin=TREK_PUBLIC_ORIGIN, guest_plugin_path=GUEST_PLUGIN_PATH, cookie_path=COOKIE_PATH)
     invalid_proxy_entries = [part for part in re.split(r"[\s,]+", TRUSTED_PROXY_CIDRS_RAW) if part.strip() and not _parse_trusted_proxy_networks(part.strip())]
     log_event(logging.INFO, "startup.runtime", uid=os.getuid() if hasattr(os, "getuid") else "unknown", gid=os.getgid() if hasattr(os, "getgid") else "unknown", client_ip_logging=LOG_CLIENT_IP, session_ttl=(SESSION_TTL_SECONDS if SESSION_TTL_SECONDS > 0 else "disabled"), session_cookie_max_age=SESSION_COOKIE_MAX_AGE_SECONDS, session_max=SESSION_MAX, session_rate_per_minute=SESSION_CREATE_PER_MINUTE)
     log_event(logging.INFO, "startup.logging", format=LOG_FORMAT, full_logging=FULL_LOGGING, static_requests=LOG_STATIC_REQUESTS, safe_request_headers=LOG_SAFE_REQUEST_HEADERS, client_event_logging=CLIENT_EVENT_LOGGING, client_event_rate_per_minute=CLIENT_EVENT_RATE_PER_MINUTE, heartbeat_seconds=LOG_HEARTBEAT_SECONDS)
