@@ -190,7 +190,7 @@ module.exports = definePlugin({
     await ctx.db.migrate('003_enable_ical', `
       ALTER TABLE portals ADD COLUMN enable_ical INTEGER NOT NULL DEFAULT 0
     `);
-    ctx.log.info('Guest Portal v3.3.1 loaded');
+    ctx.log.info('Guest Portal v3.3.2 loaded');
   },
 
   routes: [
