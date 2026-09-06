@@ -5,7 +5,10 @@
 # Docker DNS without merging this service into TREK's Compose project.
 services:
   trek-guest-portal:
-    image: python:3.12-alpine
+    build:
+      context: ./companion
+      dockerfile: Dockerfile
+    image: trek-guest-portal:3.3.0
     container_name: trek-guest-portal
     restart: unless-stopped
     read_only: true
