@@ -10,7 +10,7 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ### Changed
 
-- Split car and taxi reservations into a dedicated **Cars & Taxis** tab instead of listing them with Flights.
+- Nothing yet.
 
 ### Fixed
 
@@ -35,6 +35,7 @@ All notable project changes represented by TREK Guest Portal releases are docume
 ### Validation
 
 - Synchronized active package, runtime, documentation, and cache-busting version markers to 2.1.1.
+- Updated the documentation audit to cover current v4 behavior, root-level Compose usage, and release packaging cleanup.
 
 ---
 

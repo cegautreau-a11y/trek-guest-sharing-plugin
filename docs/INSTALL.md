@@ -398,11 +398,14 @@ Confirm:
 - Plan and Mapbox load correctly, with planned stops, flights, bookings, and accommodations merged chronologically by day;
 - selecting a stop moves the map beneath that stop and frames about 1 km;
 - standalone `hotel` bookings appear under Reservations → Accommodations rather than Bookings;
+- matching native accommodation and Hotel partner records appear only once, even when TREK v4 omits `reservation_id` linkage;
+- accommodation Check-in and Check-out show calendar dates, including for time-only v4 values reconstructed from trip days or place assignments;
+- car and taxi reservations appear under Cars & Taxis and do not appear under Flights;
 - Flights and Reservations are visible even when empty;
 - live flight information appears when a provider key is configured;
 - Photos load when a Journey gallery share is configured;
 - Immich-backed photos use original capture dates when Immich is configured;
-- after session creation the address bar no longer contains the native share values.
+- after session creation the complete owner-generated fragment remains in the address bar so a refresh can recreate the guest session; the fragment is not sent in normal HTTP request URLs.
 
 ## Step 16 — Verify logging safety
 

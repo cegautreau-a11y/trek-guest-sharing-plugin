@@ -45,3 +45,5 @@ You can create the same artifacts locally:
 ```bash
 ./scripts/package-release.sh
 ```
+
+The release command removes older versioned ZIPs and stale `dist/SHA256SUMS` before generating the current plugin, companion, complete-bundle, and checksum artifacts. The complete bundle includes the root-level Compose deployment files and documentation needed for offline transfer.

@@ -2,6 +2,14 @@
 
 Guest Portal renders transport reservations from the native TREK public share. Optional live data is enriched server-side with AeroDataBox and adsb.fi.
 
+## Sparse TREK v4 flight records
+
+TREK v4 reservations may provide only partial flight metadata. Guest Portal builds ordered legs from explicit metadata when available and fills missing first, intermediate, or final segments from ordered reservation endpoints and adjacent reservation fields. Normalization is capped at six legs per reservation to prevent malformed shared data from expanding the itinerary indefinitely.
+
+## Cars and taxis
+
+Car and taxi reservations remain part of the Plan timeline but are excluded from the Flights tab. When present, they appear in the dedicated **Cars & Taxis** tab with their route, dates, location, status, and notes.
+
 ## Native sharing requirement
 
 The TREK public share must enable Bookings. If Bookings are not shared, Guest Portal cannot expose Flights or Reservations.

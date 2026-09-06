@@ -4,7 +4,7 @@ Before installing TREK Guest Portal 2.1.1, confirm the following.
 
 ## 1. Supported TREK deployment
 
-- TREK `>=3.4.0 <4.0.0` is running in Docker.
+- TREK `>=4.0.0 <5.0.0` is running in Docker.
 - You can sign in to TREK as an administrator and upload plugins.
 - You can identify the running TREK application container/service and its Docker network.
 

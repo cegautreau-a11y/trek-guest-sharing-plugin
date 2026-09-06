@@ -35,7 +35,7 @@ The companion does not mount or read TREK plugin databases at runtime.
 
 The Plan tab is the chronological guest overview. For each shared trip day, the browser merges planned place assignments with shared transport reservations, non-transport bookings, and accommodations. Accommodation ranges are represented on each covered day as check-in, stay, or check-out entries.
 
-TREK accommodations normally have a linked `hotel` reservation. Guest Portal treats the native accommodation as authoritative and suppresses that linked Hotel record to prevent duplication. A standalone reservation whose type is `hotel` is classified as an accommodation so it appears under **Accommodations** rather than **Bookings**. The dedicated Flights and Reservations tabs remain available for richer detail.
+TREK accommodations normally have a linked `hotel` reservation. Guest Portal treats the native accommodation as authoritative and suppresses that linked Hotel record to prevent duplication. When TREK v4 omits `reservation_id` linkage, the companion also compares shared place identity, normalized name, and address before including a standalone Hotel record. Accommodation Check-in/Check-out values can be reconstructed from time-only fields plus TREK day IDs or place assignments; when only a start day exists, the following trip day is used for checkout. A standalone reservation whose type is `hotel` is classified as an accommodation so it appears under **Accommodations** rather than **Bookings**. The dedicated Flights, Cars & Taxis, and Reservations tabs remain available for richer detail.
 
 ## Docker topology
 
