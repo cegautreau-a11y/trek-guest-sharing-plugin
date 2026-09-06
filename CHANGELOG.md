@@ -2,11 +2,11 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
-## Unreleased
+## 3.1.0
 
 ### Added
 
-- Nothing yet.
+- `docker-compose-portainer.yml`: standalone Docker Compose file with all values hardcoded for direct use in Portainer's stack editor. No `.env` or variable substitution required.
 
 ### Changed
 
