@@ -299,8 +299,8 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.3.7"
-PRODID = "-//TREK Guest Portal//NONSGML v3.3.7//EN"
+VERSION = "3.3.8"
+PRODID = "-//TREK Guest Portal//NONSGML v3.3.8//EN"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -2102,9 +2102,9 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
     # Ensure seconds are present so fromisoformat parses correctly.
     if len(value) == 16:  # YYYY-MM-DDTHH:MM
         value = value + ":00"
-    elif len(value) == 12:  # YYYYMMDDTHHMM (compact, no separators or seconds)
-        # Insert separators and pad seconds so fromisoformat can parse it.
-        value = f"{value[:8]}-{value[8:10]}:{value[10:12]}:00"
+    elif len(value) == 12:  # YYYYMMDDTHHMM (compact, no seconds)
+        # Convert to YYYY-MM-DDTHH:MM:00 for fromisoformat.
+        value = f"{value[:4]}-{value[4:6]}-{value[6:8]}T{value[9:11]}:{value[11:13]}:00"
     if is_date:
         return value[:10].replace("-", ""), ""
     if tz:
@@ -2224,7 +2224,7 @@ def _build_ical_feed(trip_data: dict) -> str:
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//TREK Guest Portal//NONSGML v3.3.7//EN",
+        "PRODID:-//TREK Guest Portal//NONSGML v3.3.8//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
@@ -2301,7 +2301,6 @@ def _build_ical_feed(trip_data: dict) -> str:
                 last_leg = legs[-1] if isinstance(legs[-1], dict) else {}
                 end_dt, end_tz = _ical_dt(last_leg.get("arr_time") or last_leg.get("arrival_time"), to_tz)
             if not end_dt:
-                # TREK uses reservation_end_time for the arrival/departure end time; arrival uses to_tz.
                 end_dt, end_tz = _ical_dt(
                     item.get("reservation_end_time") or item.get("end_time") or item.get("arrival_time"),
                     to_tz
@@ -2326,15 +2325,17 @@ def _build_ical_feed(trip_data: dict) -> str:
 
         notes = str(item.get("notes") or item.get("confirmation_code") or "").strip()
 
+        # Skip events with no start or end time — Google Calendar requires both.
+        if not start_dt or not end_dt:
+            continue
+
         lines.append("BEGIN:VEVENT")
         lines.append(f"UID:{uid}")
         lines.append(f"DTSTAMP:{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}")
-        if start_dt:
-            tzid = f";TZID={start_tz}" if start_tz else ""
-            lines.append(f"DTSTART{tzid}:{start_dt}")
-        if end_dt:
-            tzid = f";TZID={end_tz}" if end_tz else ""
-            lines.append(f"DTEND{tzid}:{end_dt}")
+        tzid = f";TZID={start_tz}" if start_tz else ""
+        lines.append(f"DTSTART{tzid}:{start_dt}")
+        tzid = f";TZID={end_tz}" if end_tz else ""
+        lines.append(f"DTEND{tzid}:{end_dt}")
         lines.append(f"SUMMARY:{_ical_escape(summary)}")
         if location:
             lines.append(f"LOCATION:{_ical_escape(location)}")
