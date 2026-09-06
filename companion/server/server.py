@@ -299,7 +299,8 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.3.5"
+VERSION = "3.3.7"
+PRODID = "-//TREK Guest Portal//NONSGML v3.3.7//EN"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -2118,6 +2119,15 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
             pass
     return value.replace("-", "").replace(":", ""), ""
 
+
+def _tz_offset(tz_name: str) -> int | None:
+    """Return the UTC offset in seconds for an IANA timezone, or None if invalid."""
+    try:
+        return ZoneInfo(tz_name).utcoffset(datetime.now()).total_seconds()
+    except Exception:
+        return None
+
+
 def _make_uid(kind: str, item_id: str, trip_id: str | None) -> str:
     safe_id = re.sub(r"[^A-Za-z0-9]", "-", f"{kind}-{item_id}")
     trip_part = f"{re.sub(r'[^A-Za-z0-9]', '-', str(trip_id or 'unknown'))}-" if trip_id else ""
@@ -2214,7 +2224,7 @@ def _build_ical_feed(trip_data: dict) -> str:
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//TREK Guest Portal//NONSGML v3.3.6//EN",
+        "PRODID:-//TREK Guest Portal//NONSGML v3.3.7//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
@@ -2260,23 +2270,29 @@ def _build_ical_feed(trip_data: dict) -> str:
                 if from_loc and to_loc:
                     summary += f" {from_loc} → {to_loc}"
 
-            # Resolve per-event timezone: airport code first, then GPS via place coordinates.
-            # For flights where from/to fields are empty, extract IATA codes from the title.
+            # Resolve per-event timezone from metadata first (TREK provides proper IANA tz).
+            # Fall back to airport-code extraction from title, then GPS lookup, then ICAL_TIMEZONE.
+            from_tz = ICAL_TIMEZONE
+            to_tz = ICAL_TIMEZONE
             title = item.get("title") or ""
-            tz_source = from_loc or (title if kind_str == "flight" else "")
-            from_tz = (_resolve_airport_timezone(tz_source)
-                        or _resolve_gps_timezone(trip_data, tz_source)
-                        or ICAL_TIMEZONE)
-            # For flights, also try to extract destination from title for to_tz.
-            to_tz_source = to_loc
-            if kind_str == "flight" and not to_loc and title:
-                # Extract last IATA code from title as destination airport.
-                tokens = _AIRPORT_CODE_RE.findall(title)
-                if tokens:
-                    to_tz_source = tokens[-1]
-            to_tz = (_resolve_airport_timezone(to_tz_source)
-                       or _resolve_gps_timezone(trip_data, to_tz_source)
-                       or ICAL_TIMEZONE)
+            meta_str = item.get("metadata") or ""
+            if meta_str:
+                try:
+                    meta = json.loads(meta_str) if isinstance(meta_str, str) else meta_str
+                    if kind_str == "flight":
+                        from_tz = str(meta.get("departure_timezone") or "").strip() or ICAL_TIMEZONE
+                        to_tz = str(meta.get("arrival_timezone") or "").strip() or ICAL_TIMEZONE
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            # Validate timezones; fall back to IANA code extraction from title if invalid.
+            if from_tz and _tz_offset(from_tz) is None:
+                from_tz = (_resolve_airport_timezone(title)
+                           or _resolve_gps_timezone(trip_data, title)
+                           or ICAL_TIMEZONE)
+            if to_tz and _tz_offset(to_tz) is None:
+                to_tz = (_resolve_airport_timezone(title)
+                           or _resolve_gps_timezone(trip_data, title)
+                           or ICAL_TIMEZONE)
             start_dt, start_tz = _ical_dt(item.get("reservation_time"), from_tz)
             end_dt, end_tz = "", ""
             # For flights, arrival time is in destination timezone; fallback uses departure tz.
@@ -2285,7 +2301,11 @@ def _build_ical_feed(trip_data: dict) -> str:
                 last_leg = legs[-1] if isinstance(legs[-1], dict) else {}
                 end_dt, end_tz = _ical_dt(last_leg.get("arr_time") or last_leg.get("arrival_time"), to_tz)
             if not end_dt:
-                end_dt, end_tz = _ical_dt(item.get("end_time") or item.get("arrival_time"), from_tz)
+                # TREK uses reservation_end_time for the arrival/departure end time; arrival uses to_tz.
+                end_dt, end_tz = _ical_dt(
+                    item.get("reservation_end_time") or item.get("end_time") or item.get("arrival_time"),
+                    to_tz
+                )
 
         else:  # accommodation
             place = item.get("place") or {}
