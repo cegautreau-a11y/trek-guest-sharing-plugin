@@ -2071,12 +2071,12 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
         return value[:10].replace("-", ""), ""
     if tz:
         try:
-            naive = datetime.fromisoformat(value[:19])
+            naive = datetime.fromisoformat(value)
             local = naive.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(tz))
             return local.strftime("%Y%m%dT%H%M%S"), tz
         except Exception:
             pass
-    return value[:15].replace("-", "").replace(":", ""), ""
+    return value.replace("-", "").replace(":", ""), ""
 
 def _make_uid(kind: str, item_id: str, trip_id: str | None) -> str:
     safe_id = re.sub(r"[^A-Za-z0-9]", "-", f"{kind}-{item_id}")
