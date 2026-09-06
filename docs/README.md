@@ -7,6 +7,7 @@
 - [Reverse proxy](REVERSE-PROXY.md)
 - [Architecture](ARCHITECTURE.md)
 - [Flights](FLIGHTS.md)
+- [Cars & Taxis](CARSTAXIS.md)
 - [Photos and Immich](PHOTOS.md)
 - [Upgrading](UPGRADING.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
