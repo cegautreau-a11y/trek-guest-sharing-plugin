@@ -2,6 +2,19 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.4.0
+
+### Changed
+
+- **Airport timezone database**: Airport-to-timezone mappings are now stored in a SQLite database (`tools/airport_tz.db`) generated from `tools/generate-airport-timezones.py`. This provides a comprehensive 189-airport database that can be extended without modifying code. Server loads lazily on first use with fallback to embedded dict if database unavailable.
+- **Tools directory excluded from distribution**: The `tools/` directory is no longer included in release archives or pushed to git.
+
+## 3.3.13
+
+### Fixed
+
+- **Dominican Republic airports**: Added PUJ (Punta Cana), SDQ (Santo Domingo), POP (Puerto Plata) timezone mappings.
+
 ## 3.3.6
 
 ### Fixed

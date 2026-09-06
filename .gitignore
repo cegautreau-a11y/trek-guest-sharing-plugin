@@ -8,3 +8,5 @@ secrets/
 tests/
 .DS_Store
 CONTRIBUTING.md
+tools/
+*.db

@@ -11,12 +11,11 @@ rm -f "$OUT"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-mkdir -p "$TMP/public" "$TMP/server" "$TMP/tools" "$TMP/docs" "$TMP/examples"
+mkdir -p "$TMP/public" "$TMP/server" "$TMP/docs" "$TMP/examples"
 
 # Runtime application files.
 cp companion/public/app.js companion/public/index.html companion/public/style.css companion/public/config.js.example "$TMP/public/"
 cp companion/server/server.py "$TMP/server/"
-cp companion/tools/*.py companion/tools/README.md "$TMP/tools/"
 cp companion/Dockerfile "$TMP/"
 
 # Standalone Compose deployment and project documentation.

@@ -111,67 +111,111 @@ SESSION_COOKIE_NAME = "trek_guest_session"
 ICAL_TIMEZONE = os.environ.get("ICAL_TIMEZONE", "UTC").strip()
 
 # Airport code → IANA timezone mapping for per-event timezone conversion in iCal feeds.
-_AIRPORT_TZ: dict[str, str] = {
-    # Brazil
-    "GRU": "America/Sao_Paulo", "GIG": "America/Sao_Paulo", "CGH": "America/Sao_Paulo",
-    "BSB": "America/Sao_Paulo", "SSA": "America/Bahia", "CWB": "America/Sao_Paulo",
-    "POA": "America/Sao_Paulo", "FLN": "America/Sao_Paulo", "REC": "America/Recife",
-    "FOR": "America/Fortaleza", "MAO": "America/Manaus", "BEL": "America/Belem",
-    "NAT": "America/Recife", "MCZ": "America/Maceio", "JPQ": "America/Sao_Paulo",
-    "NVT": "America/Sao_Paulo", "RBE": "America/Sao_Paulo",
-    # Canada
-    "YYZ": "America/Toronto", "Yyz": "America/Toronto", "YUL": "America/Montreal",
-    "YVR": "America/Vancouver", "YWG": "America/Winnipeg", "YEG": "America/Edmonton",
-    "YOW": "America/Toronto", "YQB": "America/Toronto", "YTZ": "America/Toronto",
-    "YYC": "America/Edmonton", "YHZ": "America/Halifax", "YQR": "America/Regina",
-    "YXY": "America/Whitehorse", "YEG": "America/Edmonton",
-    # United States
-    "JFK": "America/New_York", "LAX": "America/Los_Angeles", "ORD": "America/Chicago",
-    "DFW": "America/Chicago", "DEN": "America/Denver", "SFO": "America/Los_Angeles",
-    "SEA": "America/Los_Angeles", "LAS": "America/Los_Angeles", "MCO": "America/New_York",
-    "MIA": "America/New_York", "ATL": "America/New_York", "BOS": "America/New_York",
-    "PHL": "America/New_York", "EWR": "America/New_York", "LGA": "America/New_York",
-    "DCA": "America/New_York", "IAD": "America/New_York", "MSP": "America/Chicago",
-    "DTW": "America/Detroit", "PHX": "America/Phoenix", "IAH": "America/Chicago",
-    "SAN": "America/Los_Angeles", "TUS": "America/Phoenix", "PDX": "America/Los_Angeles",
-    "AUS": "America/Chicago", "MSY": "America/Chicago", "BWI": "America/New_York",
-    "SLC": "America/Denver", "IND": "America/Indiana/Indianapolis", "CMH": "America/Indiana/Indianapolis",
-    "CLE": "America/New_York", "RIC": "America/New_York", "BNA": "America/Chicago",
-    "RDU": "America/New_York", "CAI": "Africa/Cairo",
-    # Europe
-    "LHR": "Europe/London", "LGW": "Europe/London", "STN": "Europe/London", "LTN": "Europe/London",
-    "CDG": "Europe/Paris", "ORY": "Europe/Paris",
-    "FRA": "Europe/Berlin", "MUC": "Europe/Berlin",
-    "AMS": "Europe/Amsterdam", "MAD": "Europe/Madrid", "BCN": "Europe/Madrid",
-    "FCO": "Europe/Rome", "MXP": "Europe/Rome",
-    "ZRH": "Europe/Zurich", "VIE": "Europe/Vienna", "BRU": "Europe/Brussels",
-    "DUB": "Europe/Dublin", "CPH": "Europe/Copenhagen", "OSL": "Europe/Oslo",
-    "ARN": "Europe/Stockholm", "HEL": "Europe/Helsinki", "WAW": "Europe/Warsaw",
-    "PRG": "Europe/Prague", "BUD": "Europe/Budapest", "ATH": "Europe/Athens",
-    "IST": "Europe/Istanbul",
-    # Asia / Pacific
-    "HND": "Asia/Tokyo", "NRT": "Asia/Tokyo", "KIX": "Asia/Tokyo",
-    "PVG": "Asia/Shanghai", "SHA": "Asia/Shanghai", "PEK": "Asia/Shanghai",
-    "HKG": "Asia/Hong_Kong", "ICN": "Asia/Seoul", "GMP": "Asia/Seoul",
-    "SIN": "Asia/Singapore", "BKK": "Asia/Bangkok", "KUL": "Asia/Kuala_Lumpur",
-    "DEL": "Asia/Kolkata", "BOM": "Asia/Kolkata", "MAA": "Asia/Kolkata",
-    "DXB": "Asia/Dubai", "AUH": "Asia/Dubai", "DOH": "Asia/Qatar",
-    "TLV": "Asia/Jerusalem", "JFK": "America/New_York",
-    "SYD": "Australia/Sydney", "MEL": "Australia/Melbourne", "BNE": "Australia/Brisbane",
-    "PER": "Australia/Perth", "AKL": "Pacific/Auckland",
-    # South / Central America
-    "EZE": "America/Argentina/Buenos_Aires", "AEP": "America/Argentina/Buenos_Aires",
-    "SCL": "America/Santiago", "LIM": "America/Lima", "BOG": "America/Bogota",
-    "MDE": "America/Bogota", "CLO": "America/Bogota", "GYE": "America/Guayaquil",
-    "UIO": "America/Guayaquil", "MEX": "America/Mexico_City", "CUN": "America/Cancun",
-    "GDL": "America/Mexico_City", "MTY": "America/Monterrey", "QRO": "America/Mexico_City",
-    "SAP": "America/Tegucigalpa", "SJO": "America/Costa_Rica", "PTY": "America/Panama",
-    "HAV": "America/Havana", "NAS": "America/Nassau", "KIN": "America/Jamaica",
-    # Africa
-    "JNB": "Africa/Johannesburg", "CPT": "Africa/Johannesburg", "Cairo": "Africa/Cairo",
-    "LOS": "Africa/Lagos", "ACC": "Africa/Accra", "ADD": "Africa/Addis_Ababa",
-    "NBO": "Africa/Nairobi", "DUR": "Africa/Johannesburg", "ABJ": "Africa/Abidjan",
-}
+# This is loaded lazily from the SQLite database at tools/airport_tz.db
+_AIRPORT_TZ: dict[str, str] = {}
+
+# Lazy-load flag
+_AIRPORT_TZ_LOADED = False
+
+
+def _load_airport_tz_database() -> dict[str, str]:
+    """Load airport timezone mappings from SQLite database.
+
+    The database is built by running: python tools/generate-airport-timezones.py
+    If the database doesn't exist, returns the embedded fallback dict.
+    """
+    global _AIRPORT_TZ, _AIRPORT_TZ_LOADED
+
+    if _AIRPORT_TZ_LOADED:
+        return _AIRPORT_TZ
+
+    db_path = os.path.join(os.path.dirname(__file__), "..", "..", "tools", "airport_tz.db")
+
+    # Fallback embedded mapping for essential airports (used if DB not available)
+    _AIRPORT_TZ = {
+        # Brazil
+        "GRU": "America/Sao_Paulo", "GIG": "America/Sao_Paulo", "CGH": "America/Sao_Paulo",
+        "BSB": "America/Sao_Paulo", "SSA": "America/Bahia", "CWB": "America/Sao_Paulo",
+        "POA": "America/Sao_Paulo", "FLN": "America/Sao_Paulo", "REC": "America/Recife",
+        "FOR": "America/Fortaleza", "MAO": "America/Manaus", "BEL": "America/Belem",
+        "NAT": "America/Recife", "MCZ": "America/Maceio", "JPQ": "America/Sao_Paulo",
+        "NVT": "America/Sao_Paulo", "RBE": "America/Sao_Paulo",
+        # Canada
+        "YYZ": "America/Toronto", "YUL": "America/Montreal",
+        "YVR": "America/Vancouver", "YWG": "America/Winnipeg", "YEG": "America/Edmonton",
+        "YOW": "America/Toronto", "YQB": "America/Toronto", "YTZ": "America/Toronto",
+        "YYC": "America/Edmonton", "YHZ": "America/Halifax", "YQR": "America/Regina",
+        "YXY": "America/Whitehorse",
+        # United States
+        "JFK": "America/New_York", "LAX": "America/Los_Angeles", "ORD": "America/Chicago",
+        "DFW": "America/Chicago", "DEN": "America/Denver", "SFO": "America/Los_Angeles",
+        "SEA": "America/Los_Angeles", "LAS": "America/Los_Angeles", "MCO": "America/New_York",
+        "MIA": "America/New_York", "ATL": "America/New_York", "BOS": "America/New_York",
+        "PHL": "America/New_York", "EWR": "America/New_York", "LGA": "America/New_York",
+        "DCA": "America/New_York", "IAD": "America/New_York", "MSP": "America/Chicago",
+        "DTW": "America/Detroit", "PHX": "America/Phoenix", "IAH": "America/Chicago",
+        "SAN": "America/Los_Angeles", "PDX": "America/Los_Angeles",
+        "AUS": "America/Chicago", "MSY": "America/Chicago", "BWI": "America/New_York",
+        "SLC": "America/Denver", "IND": "America/Indiana/Indianapolis", "CMH": "America/Indiana/Indianapolis",
+        "CLE": "America/New_York", "RIC": "America/New_York", "BNA": "America/Chicago",
+        "RDU": "America/New_York",
+        # Europe
+        "LHR": "Europe/London", "LGW": "Europe/London", "STN": "Europe/London", "LTN": "Europe/London",
+        "CDG": "Europe/Paris", "ORY": "Europe/Paris",
+        "FRA": "Europe/Berlin", "MUC": "Europe/Berlin",
+        "AMS": "Europe/Amsterdam", "MAD": "Europe/Madrid", "BCN": "Europe/Madrid",
+        "FCO": "Europe/Rome", "MXP": "Europe/Rome",
+        "ZRH": "Europe/Zurich", "VIE": "Europe/Vienna", "BRU": "Europe/Brussels",
+        "DUB": "Europe/Dublin", "CPH": "Europe/Copenhagen", "OSL": "Europe/Oslo",
+        "ARN": "Europe/Stockholm", "HEL": "Europe/Helsinki", "WAW": "Europe/Warsaw",
+        "PRG": "Europe/Prague", "BUD": "Europe/Budapest", "ATH": "Europe/Athens",
+        "IST": "Europe/Istanbul",
+        # Asia / Pacific
+        "HND": "Asia/Tokyo", "NRT": "Asia/Tokyo", "KIX": "Asia/Tokyo",
+        "PVG": "Asia/Shanghai", "SHA": "Asia/Shanghai", "PEK": "Asia/Shanghai",
+        "HKG": "Asia/Hong_Kong", "ICN": "Asia/Seoul", "GMP": "Asia/Seoul",
+        "SIN": "Asia/Singapore", "BKK": "Asia/Bangkok", "KUL": "Asia/Kuala_Lumpur",
+        "DEL": "Asia/Kolkata", "BOM": "Asia/Kolkata", "MAA": "Asia/Kolkata",
+        "DXB": "Asia/Dubai", "AUH": "Asia/Dubai", "DOH": "Asia/Qatar",
+        "TLV": "Asia/Jerusalem",
+        "SYD": "Australia/Sydney", "MEL": "Australia/Melbourne", "BNE": "Australia/Brisbane",
+        "PER": "Australia/Perth", "AKL": "Pacific/Auckland",
+        # South / Central America
+        "EZE": "America/Argentina/Buenos_Aires", "AEP": "America/Argentina/Buenos_Aires",
+        "SCL": "America/Santiago", "LIM": "America/Lima", "BOG": "America/Bogota",
+        "MDE": "America/Bogota", "CLO": "America/Bogota", "GYE": "America/Guayaquil",
+        "UIO": "America/Guayaquil", "MEX": "America/Mexico_City", "CUN": "America/Cancun",
+        "GDL": "America/Mexico_City", "MTY": "America/Monterrey", "QRO": "America/Mexico_City",
+        "SAP": "America/Tegucigalpa", "SJO": "America/Costa_Rica", "PTY": "America/Panama",
+        "HAV": "America/Havana", "NAS": "America/Nassau", "KIN": "America/Jamaica",
+        "PUJ": "America/Santo_Domingo", "SDQ": "America/Santo_Domingo", "POP": "America/Santo_Domingo",
+        "GDT": "America/Grand_Turk", "PLS": "America/Grand_Turk", "SXM": "America/Marigot",
+        # Africa
+        "JNB": "Africa/Johannesburg", "CPT": "Africa/Johannesburg", "CAI": "Africa/Cairo",
+        "LOS": "Africa/Lagos", "ACC": "Africa/Accra", "ADD": "Africa/Addis_Ababa",
+        "NBO": "Africa/Nairobi", "DUR": "Africa/Johannesburg", "ABJ": "Africa/Abidjan",
+    }
+
+    try:
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT iata_code, timezone FROM airports")
+            rows = cursor.fetchall()
+            conn.close()
+
+            if rows:
+                _AIRPORT_TZ = {code: tz for code, tz in rows}
+                logging.info(f"Loaded {len(_AIRPORT_TZ)} airport timezone mappings from database")
+            else:
+                logging.warning("Airport timezone database is empty, using embedded fallback")
+        else:
+            logging.warning(f"Airport timezone database not found at {db_path}, using embedded fallback")
+    except Exception as e:
+        logging.warning(f"Failed to load airport timezone database: {e}, using embedded fallback")
+
+    _AIRPORT_TZ_LOADED = True
+    return _AIRPORT_TZ
 
 
 # Matches 3-letter IATA airport codes embedded in any string (e.g. "LA3307 SDU → CGH → FLN").
@@ -193,17 +237,20 @@ def _resolve_airport_timezone(airport_code: str) -> str | None:
     if not airport_code:
         return None
 
+    # Ensure airport timezone database is loaded
+    airport_tz = _load_airport_tz_database()
+
     code = airport_code.strip().upper()
 
     # Fast path: plain IATA code lookup.
-    if code in _AIRPORT_TZ:
-        return _AIRPORT_TZ[code]
+    if code in airport_tz:
+        return airport_tz[code]
 
     # Extract all 3-letter tokens and prefer the last one (destination airport)
     # for round-trip flights where the title lists: DEP → CONNECTION1 → CONNECTION2 → ARR
     tokens = _AIRPORT_CODE_RE.findall(airport_code)
     for icao in reversed(tokens):
-        tz = _AIRPORT_TZ.get(icao)
+        tz = airport_tz.get(icao)
         if tz:
             return tz
 
@@ -299,8 +346,8 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.3.9"
-PRODID = "-//TREK Guest Portal//NONSGML v3.3.9//EN"
+VERSION = "3.4.0"
+PRODID = "-//TREK Guest Portal//NONSGML v3.3.12//EN"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -2113,11 +2160,50 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
             # Validate the timezone by checking it can produce a UTC offset.
             tz_obj.utcoffset(datetime.now())
             naive = datetime.fromisoformat(value)
-            local = naive.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz_obj)
+            # reservation_time from TREK is the local wall-clock time at the departure
+            # airport, NOT UTC.  Return the local time with the IANA tz name so that
+            # Google Calendar (with VTIMEZONE blocks present) can display it correctly.
+            local = naive.replace(tzinfo=tz_obj)
             return local.strftime("%Y%m%dT%H%M%S"), tz
         except Exception:
             pass
     return value.replace("-", "").replace(":", ""), ""
+
+
+def _build_vtimezone(tz_name: str) -> str:
+    """Generate a minimal RFC 5545 VTIMEZONE component for the given IANA timezone.
+
+    Produces a single STANDARD sub-component with a fixed UTC offset and a real
+    historical DTSTART (1967-10-29) to satisfy parsers that require it.
+    This is sufficient for Google Calendar to correctly interpret DTSTART/DTEND
+    times that use TZID= on the property line.
+    """
+    try:
+        tz_obj = ZoneInfo(tz_name)
+        now = datetime.now(tz_obj)
+        offset = tz_obj.utcoffset(now)
+        if offset is None:
+            return ""
+        total_seconds = int(offset.total_seconds())
+        sign = "+" if total_seconds >= 0 else "-"
+        total_seconds = abs(total_seconds)
+        hh = total_seconds // 3600
+        mm = (total_seconds % 3600) // 60
+        offset_str = f"{sign}{hh:02d}{mm:02d}"
+        lines = [
+            "BEGIN:VTIMEZONE",
+            f"TZID:{tz_name}",
+            "BEGIN:STANDARD",
+            "DTSTART:19671029T020000",
+            f"TZOFFSETFROM:{offset_str}",
+            f"TZOFFSETTO:{offset_str}",
+            f"TZNAME:{tz_name}",
+            "END:STANDARD",
+            "END:VTIMEZONE",
+        ]
+        return "\r\n".join(lines)
+    except Exception:
+        return ""
 
 
 def _tz_offset(tz_name: str) -> int | None:
@@ -2221,16 +2307,22 @@ def _build_ical_feed(trip_data: dict) -> str:
 
     items.sort(key=sort_key)
 
+    # Collect all unique timezones used in this feed for VTIMEZONE blocks.
+    # Use a dict to count occurrences so we can determine the primary timezone.
+    feed_tz_counts: dict[str, int] = {}
+
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//TREK Guest Portal//NONSGML v3.3.9//EN",
+        "PRODID:-//TREK Guest Portal//NONSGML v3.3.13//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
-        f"X-WR-TIMEZONE:{ICAL_TIMEZONE}",
     ]
 
+    # Pre-compute start/end times and collect timezones before writing VEVENT lines.
+    # Each entry is (item, start_dt, start_tz, end_dt, end_tz, summary, location, notes, uid)
+    event_data: list[tuple] = []
     for item in items:
         kind_str = item["_kind"]
         item_id = str(item.get("id") or item.get("reservation_id") or "")
@@ -2284,12 +2376,13 @@ def _build_ical_feed(trip_data: dict) -> str:
                         to_tz = str(meta.get("arrival_timezone") or "").strip() or ICAL_TIMEZONE
                 except (json.JSONDecodeError, TypeError):
                     pass
-            # Validate timezones; fall back to IANA code extraction from title if invalid.
-            if from_tz and _tz_offset(from_tz) is None:
+            # Validate timezones; fall back to airport code extraction from title.
+            # Also re-resolve if we only have the default ICAL_TIMEZONE (not a real event tz).
+            if from_tz and (_tz_offset(from_tz) is None or from_tz == ICAL_TIMEZONE):
                 from_tz = (_resolve_airport_timezone(title)
                            or _resolve_gps_timezone(trip_data, title)
                            or ICAL_TIMEZONE)
-            if to_tz and _tz_offset(to_tz) is None:
+            if to_tz and (_tz_offset(to_tz) is None or to_tz == ICAL_TIMEZONE):
                 to_tz = (_resolve_airport_timezone(title)
                            or _resolve_gps_timezone(trip_data, title)
                            or ICAL_TIMEZONE)
@@ -2329,9 +2422,38 @@ def _build_ical_feed(trip_data: dict) -> str:
         if not start_dt or not end_dt:
             continue
 
+        # Collect timezones for VTIMEZONE generation and primary timezone detection.
+        if start_tz:
+            feed_tz_counts[start_tz] = feed_tz_counts.get(start_tz, 0) + 1
+        if end_tz:
+            feed_tz_counts[end_tz] = feed_tz_counts.get(end_tz, 0) + 1
+
+        event_data.append((start_dt, start_tz, end_dt, end_tz, summary, location, notes, uid))
+
+    # Determine the primary timezone as the most common timezone across all events.
+    # Fall back to ICAL_TIMEZONE, then UTC.
+    primary_tz = ICAL_TIMEZONE
+    if feed_tz_counts:
+        primary_tz = max(feed_tz_counts, key=lambda tz: feed_tz_counts[tz])
+
+    # Set the calendar's default timezone to the primary timezone.
+    # This tells Google Calendar what timezone to use as the baseline.
+    # Individual events can override via TZID= in DTSTART/DTEND.
+    if primary_tz:
+        lines.append(f"X-WR-TIMEZONE:{primary_tz}")
+
+    # Add VTIMEZONE blocks for each timezone used in the feed.
+    for tz_name in sorted(feed_tz_counts.keys()):
+        vtz = _build_vtimezone(tz_name)
+        if vtz:
+            lines.append(vtz)
+
+    # Add all VEVENT blocks now that VTIMEZONEs are defined.
+    dtstamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    for start_dt, start_tz, end_dt, end_tz, summary, location, notes, uid in event_data:
         lines.append("BEGIN:VEVENT")
         lines.append(f"UID:{uid}")
-        lines.append(f"DTSTAMP:{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}")
+        lines.append(f"DTSTAMP:{dtstamp}")
         tzid = f";TZID={start_tz}" if start_tz else ""
         lines.append(f"DTSTART{tzid}:{start_dt}")
         tzid = f";TZID={end_tz}" if end_tz else ""
