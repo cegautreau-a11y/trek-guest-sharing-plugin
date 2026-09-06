@@ -2848,6 +2848,29 @@ class Handler(BaseHTTPRequestHandler):
                 path = "/" + path
         if path == "/health":
             return self._send_json(200, {"ok": True, "version": VERSION})
+        if path == "/debug/trip":
+            token = self.headers.get("X-Debug-Token", "").strip()
+            if not TOKEN_RE.fullmatch(token):
+                return self._send_json(400, {"error": "Invalid token"})
+            try:
+                trip_data = get_shared_trip(token, _upstream_host_header())
+            except LookupError:
+                return self._send_json(404, {"error": "Not found"})
+            except Exception as exc:
+                return self._send_json(502, {"error": str(exc)})
+            reservations = trip_data.get("reservations") or []
+            out = []
+            for r in reservations:
+                kind = str(r.get("type") or r.get("reservation_type") or r.get("category") or "")
+                if kind.lower() in {"flight", "car", "taxi", "train", "bus", "cruise", "ferry"}:
+                    out.append({
+                        "id": r.get("id") or r.get("reservation_id"),
+                        "kind": kind,
+                        "from": r.get("from") or r.get("from_location"),
+                        "to": r.get("to") or r.get("to_location"),
+                        "time": r.get("reservation_time") or r.get("start_time"),
+                    })
+            return self._send_json(200, {"token": token, "reservations": out})
         m = re.fullmatch(r"/ical/([A-Za-z0-9_-]{8,256})", path)
         if m:
             return self._ical_feed(m.group(1))
