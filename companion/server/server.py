@@ -42,7 +42,7 @@ except ModuleNotFoundError:
     _log = logging.getLogger("trek.guest")
     _log.warning("timezonefinder not found — installing at runtime")
     import subprocess
-    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "timezonefinder"], check=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--no-cache-dir", "timezonefinder"], check=True)
     from timezonefinder import TimezoneFinderL  # noqa: F401
     _TF = TimezoneFinderL(in_memory=True)
     _log.info("timezonefinder installed and loaded")
