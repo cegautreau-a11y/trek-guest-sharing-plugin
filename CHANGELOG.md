@@ -2,11 +2,11 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
-## 3.1.0
+## 3.1.3
 
-### Added
+### Fixed
 
-- `docker-compose-portainer.yml`: standalone Docker Compose file with all values hardcoded for direct use in Portainer's stack editor. No `.env` or variable substitution required.
+- **iCal route regex**: Lowered minimum session ID length from 43 to 42 to match `secrets.token_urlsafe(32)` output and existing session IDs.
 
 ### Changed
 
