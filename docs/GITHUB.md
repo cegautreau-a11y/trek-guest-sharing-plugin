@@ -34,8 +34,8 @@ Never commit:
 The included GitHub Actions release workflow runs when you push a version tag:
 
 ```bash
-git tag v2.0.3
-git push origin v2.0.3
+git tag v2.0.4
+git push origin v2.0.4
 ```
 
 It validates the source, packages the plugin and companion, and creates GitHub release assets.

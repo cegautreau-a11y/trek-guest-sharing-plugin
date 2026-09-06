@@ -1,4 +1,4 @@
-# TREK Guest Portal 2.0.3
+# TREK Guest Portal 2.0.4
 # Run from the project root with the root .env file.
 # The service definition is shared with the standalone companion deployment.
 services:

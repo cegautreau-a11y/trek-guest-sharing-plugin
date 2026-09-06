@@ -500,10 +500,22 @@ function fatal(message) {
       .map(String));
   }
 
+  function accommodationIdentity(a) {
+    const placeId = a?.place_id ?? a?.place?.id;
+    if (placeId != null && placeId !== '') return `place:${placeId}`;
+    const title = normalizeLocationMatch(text(a?.place_name, a?.title, a?.name));
+    const address = normalizeLocationMatch(text(a?.place_address, a?.address, a?.location));
+    if (title && !['hotel', 'accommodation'].includes(title)) return `name:${title}|address:${address}`;
+    return address ? `address:${address}` : '';
+  }
+
   function hotelReservations() {
     const linkedIds = linkedAccommodationReservationIds();
+    const accommodationKeys = new Set(asArray(tripData?.accommodations).map(accommodationIdentity).filter(Boolean));
     return asArray(tripData?.reservations).filter(r =>
-      reservationType(r) === 'hotel' && !linkedIds.has(String(r?.id))
+      reservationType(r) === 'hotel' &&
+      !linkedIds.has(String(r?.id)) &&
+      !accommodationKeys.has(accommodationIdentity(r))
     );
   }
 

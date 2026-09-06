@@ -2,6 +2,7 @@ dist/
 .env
 .env.local
 .venv/
+__pycache__/
 cache/
 secrets/
 tests/

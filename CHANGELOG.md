@@ -22,6 +22,18 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ---
 
+## 2.0.4 - 2026-09-06
+
+### Fixed
+
+- Deduplicated native accommodations and standalone TREK v4 hotel reservations by place, name, and address when `reservation_id` linkage is absent, preventing duplicate hotel cards and conflicting date/time entries.
+
+### Validation
+
+- Rebuilt the plugin and companion release archives for 2.0.4.
+
+---
+
 ## 2.0.3 - 2026-09-06
 
 ### Fixed
