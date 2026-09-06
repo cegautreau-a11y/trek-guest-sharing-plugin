@@ -22,6 +22,18 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ---
 
+## 2.1.0 - 2026-09-06
+
+### Changed
+
+- Promoted the current accommodation deduplication and date-correction work to the 2.1.0 release line.
+
+### Validation
+
+- Synchronized all package, runtime, documentation, and cache-busting version markers to 2.1.0.
+
+---
+
 ## 2.0.4 - 2026-09-06
 
 ### Fixed

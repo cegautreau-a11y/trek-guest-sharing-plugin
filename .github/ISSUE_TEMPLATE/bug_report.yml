@@ -8,7 +8,7 @@ body:
     attributes:
       label: Guest Portal version
       description: Which release is installed?
-      placeholder: 2.0.4
+      placeholder: 2.1.0
     validations:
       required: true
   - type: textarea

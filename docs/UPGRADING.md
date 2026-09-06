@@ -1,10 +1,10 @@
-# Upgrading to 2.0.4
+# Upgrading to 2.1.0
 
 This procedure upgrades an existing TREK Guest Portal installation to the current Docker Compose layout.
 
-## Refreshable guest links in 2.0.4
+## Refreshable guest links in 2.1.0
 
-Version 2.0.4 keeps the complete owner-generated Guest Portal URL fragment after session establishment instead of rewriting the browser back to the bare Guest Portal root. This means:
+Version 2.1.0 keeps the complete owner-generated Guest Portal URL fragment after session establishment instead of rewriting the browser back to the bare Guest Portal root. This means:
 
 - `#trip=...`, optional `journey=...`, and `title=...` metadata remain in the address bar;
 - a normal browser refresh can POST the same native share capabilities to `/api/session` and rebuild the guest session automatically;
@@ -13,7 +13,7 @@ Version 2.0.4 keeps the complete owner-generated Guest Portal URL fragment after
 
 Because the fragment contains bearer share capabilities, anyone who can copy the complete Guest Portal URL has the same read-only access as the underlying TREK/Journey public shares. Avoid publishing active guest URLs in logs, tickets, screenshots, or public repositories.
 
-Version 2.0.4 also retains the v1.2.1 privacy/timeline behavior: confirmation/reference identifiers are stripped before browser delivery, place-linked events remain attached to their Plan stops, flights use airport/assignment ordering, and accommodations show separate **Check-in**, intermediate **Stay**, and **Check-out** entries.
+Version 2.1.0 also retains the v1.2.1 privacy/timeline behavior: confirmation/reference identifiers are stripped before browser delivery, place-linked events remain attached to their Plan stops, flights use airport/assignment ordering, and accommodations show separate **Check-in**, intermediate **Stay**, and **Check-out** entries.
 
 ## Important deployment change
 
@@ -52,15 +52,15 @@ Do not publish or commit the backup because it may contain provider credentials 
 Download:
 
 ```text
-trek-guest-portal-2.0.4.zip
-trek-guest-portal-companion-2.0.4.zip
+trek-guest-portal-2.1.0.zip
+trek-guest-portal-companion-2.1.0.zip
 ```
 
 The first file is the TREK plugin. The second is the companion deployment.
 
 ## 3. Update the TREK plugin
 
-Upload `trek-guest-portal-2.0.4.zip` through **TREK → Admin → Plugins** and enable/update Guest Portal.
+Upload `trek-guest-portal-2.1.0.zip` through **TREK → Admin → Plugins** and enable/update Guest Portal.
 
 Existing per-trip Guest Portal configuration remains in the plugin's own TREK-managed database.
 
@@ -82,7 +82,7 @@ One safe approach is to extract into a temporary directory, then copy the distri
 ```bash
 rm -rf /tmp/trek-guest-portal-new
 mkdir -p /tmp/trek-guest-portal-new
-unzip trek-guest-portal-companion-2.0.4.zip -d /tmp/trek-guest-portal-new
+unzip trek-guest-portal-companion-2.1.0.zip -d /tmp/trek-guest-portal-new
 ```
 
 Copy the new application and documentation while leaving local state intact:
@@ -176,7 +176,7 @@ curl -s http://127.0.0.1:8088/health
 Expected:
 
 ```json
-{"ok":true,"version":"2.0.4"}
+{"ok":true,"version":"2.1.0"}
 ```
 
 Use the configured LAN bind address instead of loopback when the reverse proxy is remote.

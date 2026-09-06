@@ -1,18 +1,18 @@
 # Fresh Installation
 
-This is the complete first-time installation procedure for TREK Guest Portal 2.0.4 using Docker Compose.
+This is the complete first-time installation procedure for TREK Guest Portal 2.1.0 using Docker Compose.
 
 ## Step 1 — Download the release files
 
 Download these two files from the release:
 
 ```text
-trek-guest-portal-2.0.4.zip
-trek-guest-portal-companion-2.0.4.zip
+trek-guest-portal-2.1.0.zip
+trek-guest-portal-companion-2.1.0.zip
 ```
 
-- `trek-guest-portal-2.0.4.zip` is uploaded directly to TREK. Do not unzip it first.
-- `trek-guest-portal-companion-2.0.4.zip` is extracted on the Docker host.
+- `trek-guest-portal-2.1.0.zip` is uploaded directly to TREK. Do not unzip it first.
+- `trek-guest-portal-companion-2.1.0.zip` is extracted on the Docker host.
 
 Optionally verify the published SHA-256 checksums before installation.
 
@@ -23,7 +23,7 @@ In TREK:
 1. Sign in as an administrator.
 2. Open **Admin → Plugins**.
 3. Choose **Upload**.
-4. Select `trek-guest-portal-2.0.4.zip`.
+4. Select `trek-guest-portal-2.1.0.zip`.
 5. Review the requested permissions:
 
 ```text
@@ -41,7 +41,7 @@ This guide uses `/opt/trek-guest-portal`:
 
 ```bash
 sudo mkdir -p /opt/trek-guest-portal
-sudo unzip trek-guest-portal-companion-2.0.4.zip -d /opt/trek-guest-portal
+sudo unzip trek-guest-portal-companion-2.1.0.zip -d /opt/trek-guest-portal
 cd /opt/trek-guest-portal
 ```
 
@@ -242,7 +242,7 @@ docker compose logs --tail=100 trek-guest-portal
 A healthy startup includes a line similar to:
 
 ```text
-INFO startup version=2.0.4 ... public_origin=https://guest.example.com trek_public_origin=https://trek.example.com cookie_path=/
+INFO startup version=2.1.0 ... public_origin=https://guest.example.com trek_public_origin=https://trek.example.com cookie_path=/
 ```
 
 The Compose healthcheck queries the internal `/health` endpoint automatically.
@@ -326,7 +326,7 @@ curl -s http://127.0.0.1:8088/health
 Expected response:
 
 ```json
-{"ok":true,"version":"2.0.4"}
+{"ok":true,"version":"2.1.0"}
 ```
 
 Then verify the HTTPS guest origin:
