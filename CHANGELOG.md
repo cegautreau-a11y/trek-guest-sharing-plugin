@@ -22,6 +22,24 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ---
 
+## 2.0.2 - 2026-09-06
+
+### Added
+
+- Added a root-level `docker-compose.yml` for deployments started from the project root.
+
+### Changed
+
+- Updated release metadata, documentation, and package artifacts to 2.0.2.
+- Added the missing Compose environment defaults to `.env.example`.
+
+### Fixed
+
+- Completed sparse TREK v4 flight metadata from ordered endpoints so all itinerary legs render.
+- Kept local tests, virtual environments, and generated release archives out of Git.
+
+---
+
 ## 1.2.2 - 2026-08-23
 
 This maintenance release keeps the owner-generated Guest Portal share metadata in the browser URL after session establishment so an already-open guest page can be refreshed and reconstruct its session without requiring the user to locate the original share link again.

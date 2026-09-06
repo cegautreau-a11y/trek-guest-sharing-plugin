@@ -26,7 +26,7 @@ cp examples/apache-guest-vhost.conf examples/apache-vhost.conf examples/nginx-gu
 
 # companion/README.md is one directory below docs/ in source but moves to the
 # ZIP root, so rewrite only its source-tree-relative documentation links.
-sed -i 's#](../docs/#](docs/#g; s#`../docs/#`docs/#g' "$TMP/README.md"
+sed -i '' 's#](../docs/#](docs/#g; s#`../docs/#`docs/#g' "$TMP/README.md"
 
 (
   cd "$TMP"

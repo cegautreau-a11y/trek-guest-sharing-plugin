@@ -1804,23 +1804,29 @@ function fatal(message) {
 
   function getFlightLegs(r) {
     const m = parseMeta(r);
-    if (Array.isArray(m.legs) && m.legs.length) {
-      return m.legs.map((l, i) => ({
-        index:i,
-        from:text(l.from), to:text(l.to), airline:text(l.airline), airlineCode:text(l.airline_code),
-        flight:text(l.flight_number,l.flightNumber), depTime:text(l.dep_time), arrTime:text(l.arr_time),
-        seat:text(l.seat), depDayId:l.dep_day_id, arrDayId:l.arr_day_id,
-      }));
-    }
     const eps = orderedEndpoints(r);
-    const first = eps[0] || {}, last = eps[eps.length - 1] || {};
-    return [{
-      index:0,
-      from:text(first.code,m.departure_airport), to:text(last.code,m.arrival_airport),
-      airline:text(m.airline), airlineCode:text(m.airline_code), flight:text(m.flight_number,m.flightNumber),
-      depTime:text(first.local_time,r.reservation_time), arrTime:text(last.local_time,r.reservation_end_time),
-      seat:text(m.seat), depDayId:r.day_id, arrDayId:r.end_day_id,
-    }];
+    const raw = Array.isArray(m.legs) ? m.legs.filter(Boolean) : [];
+    const legCount = Math.min(6, Math.max(raw.length, Math.max(eps.length - 1, 0) || (raw.length || eps.length ? 1 : 0)));
+    const legs = [];
+    for (let i = 0; i < legCount; i++) {
+      const entry = raw[i] || {};
+      const fromEndpoint = eps[i] || {};
+      const toEndpoint = eps[i + 1] || {};
+      legs.push({
+        index:i,
+        from:text(entry.from, fromEndpoint.code, m.departure_airport),
+        to:text(entry.to, toEndpoint.code, m.arrival_airport),
+        airline:text(entry.airline, m.airline),
+        airlineCode:text(entry.airline_code, m.airline_code),
+        flight:text(entry.flight_number, entry.flightNumber, m.flight_number, m.flightNumber),
+        depTime:text(entry.dep_time, fromEndpoint.local_time, r.reservation_time),
+        arrTime:text(entry.arr_time, toEndpoint.local_time, r.reservation_end_time),
+        seat:text(entry.seat, m.seat),
+        depDayId: entry.dep_day_id ?? fromEndpoint.day_id ?? r.day_id,
+        arrDayId: entry.arr_day_id ?? toEndpoint.day_id ?? r.end_day_id ?? r.day_id,
+      });
+    }
+    return legs;
   }
 
   function formatReservationDateTime(value) {

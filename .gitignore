@@ -1,0 +1,8 @@
+dist/
+.env
+.env.local
+.venv/
+cache/
+secrets/
+tests/
+.DS_Store

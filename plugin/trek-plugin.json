@@ -1,10 +1,10 @@
 {
   "id": "guest-portal",
   "name": "Guest Portal",
-  "version": "1.2.2",
+  "version": "2.0.2",
   "apiVersion": 1,
   "type": "trip-page",
-  "trek": ">=3.4.0 <4.0.0",
+  "trek": ">=4.0.0 <5.0.0",
   "description": "Creates a hardened guest portal with Mapbox Plan, Flights, Reservations and optional Journey Photos. Uses token-free guest API sessions in the companion container.",
   "author": "Custom",
   "license": "MIT",

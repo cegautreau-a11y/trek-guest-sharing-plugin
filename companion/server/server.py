@@ -143,7 +143,7 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "1.2.2"
+VERSION = "2.0.2"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -1234,21 +1234,33 @@ def _reservation_legs(reservation: dict, reference: dict | None, reservation_id:
     """Build normalized flight legs from shared TREK data and Guest Portal cache references."""
     meta = _parse_meta(reservation)
     raw_legs = meta.get("legs") if isinstance(meta.get("legs"), list) else None
+    eps = _ordered_endpoints(reservation)
+    leg_count = min(6, max(len(raw_legs or []), len(eps) - 1 if len(eps) > 1 else 1 if (raw_legs or meta) else 0))
     legs: list[dict] = []
-    if raw_legs:
-        for item in raw_legs[:6]:
-            if not isinstance(item, dict):
-                continue
-            legs.append({
-                "from": item.get("from"), "to": item.get("to"),
-                "airline": item.get("airline"), "airlineCode": item.get("airline_code"),
-                "flight": item.get("flight_number") or item.get("flightNumber"),
-                "depTime": item.get("dep_time"), "arrTime": item.get("arr_time"),
-                "depDayId": item.get("dep_day_id"), "arrDayId": item.get("arr_day_id"),
-                "seat": item.get("seat"), "localDepDate": item.get("local_date"),
-            })
-    else:
-        eps = _ordered_endpoints(reservation)
+
+    for idx in range(leg_count):
+        item = raw_legs[idx] if isinstance(raw_legs, list) and idx < len(raw_legs) and isinstance(raw_legs[idx], dict) else {}
+        from_ep = eps[idx] if idx < len(eps) else {}
+        to_ep = eps[idx + 1] if idx + 1 < len(eps) else {}
+
+        if raw_legs is None and not eps:
+            break
+
+        legs.append({
+            "from": item.get("from") or from_ep.get("code") or meta.get("departure_airport"),
+            "to": item.get("to") or to_ep.get("code") or meta.get("arrival_airport"),
+            "airline": item.get("airline") or meta.get("airline"),
+            "airlineCode": item.get("airline_code") or meta.get("airline_code"),
+            "flight": item.get("flight_number") or item.get("flightNumber") or meta.get("flight_number") or meta.get("flightNumber"),
+            "depTime": item.get("dep_time") or from_ep.get("local_time") or reservation.get("reservation_time"),
+            "arrTime": item.get("arr_time") or to_ep.get("local_time") or reservation.get("reservation_end_time"),
+            "depDayId": item.get("dep_day_id") or from_ep.get("day_id") or reservation.get("day_id"),
+            "arrDayId": item.get("arr_day_id") or to_ep.get("day_id") or reservation.get("end_day_id") or reservation.get("day_id"),
+            "seat": item.get("seat") or meta.get("seat"),
+            "localDepDate": item.get("local_date") or from_ep.get("local_date"),
+        })
+
+    if not legs and eps:
         first = eps[0] if eps else {}
         last = eps[-1] if eps else {}
         legs.append({

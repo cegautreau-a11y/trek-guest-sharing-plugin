@@ -1,0 +1,43 @@
+# TREK Guest Portal 2.0.2
+# Run from the project root with the root .env file.
+# The service definition is shared with the standalone companion deployment.
+services:
+  trek-guest-portal:
+    extends:
+      file: ./companion/docker-compose.yml
+      service: trek-guest-portal
+    volumes:
+      - type: bind
+        source: ./companion/public
+        target: /srv/public
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./companion/server
+        target: /srv/server
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./companion/cache
+        target: /cache
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./companion/secrets/immich_api_key
+        target: /run/secrets/immich_api_key
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./companion/secrets/aerodatabox_api_key
+        target: /run/secrets/aerodatabox_api_key
+        read_only: true
+        bind:
+          create_host_path: false
+
+networks:
+  trek:
+    external: true
+    name: "${TREK_DOCKER_NETWORK:?Set TREK_DOCKER_NETWORK in .env}"

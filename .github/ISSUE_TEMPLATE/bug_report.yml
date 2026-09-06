@@ -1,0 +1,27 @@
+name: Bug report
+description: Report a reproducible problem with TREK Guest Portal
+labels:
+  - bug
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Guest Portal version
+      description: Which release is installed?
+      placeholder: 2.0.2
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the behavior and the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: List the smallest set of steps that reproduces the problem.
+    validations:
+      required: true

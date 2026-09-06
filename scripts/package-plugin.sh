@@ -22,7 +22,7 @@ cp docs/*.md "$TMP/docs/"
 
 # plugin/README.md is nested one directory below docs/ in source but moves to
 # the ZIP root, so make its installation link package-relative.
-sed -i 's#](../docs/#](docs/#g' "$TMP/README.md"
+sed -i '' 's#](../docs/#](docs/#g' "$TMP/README.md"
 
 (
   cd "$TMP"
