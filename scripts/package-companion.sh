@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 VERSION="$(tr -d '\r\n' < VERSION)"
 mkdir -p dist
 OUT="dist/trek-guest-portal-companion-${VERSION}.zip"
+find dist -maxdepth 1 -type f -name 'trek-guest-portal-companion-*.zip' ! -name "trek-guest-portal-companion-${VERSION}.zip" -delete
 rm -f "$OUT"
 
 TMP="$(mktemp -d)"

@@ -3,12 +3,13 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-./scripts/validate.sh
+sh scripts/validate.sh
 python3 -m unittest discover -s tests -v
 
+VERSION="$(tr -d '\r\n' < VERSION)"
+find dist -maxdepth 1 -type f \( -name 'trek-guest-portal-*.zip' -o -name 'SHA256SUMS' \) -delete
 PLUGIN="$(./scripts/package-plugin.sh)"
 COMPANION="$(./scripts/package-companion.sh)"
-VERSION="$(tr -d '\r\n' < VERSION)"
 BUNDLE="dist/trek-guest-portal-${VERSION}-complete-bundle.zip"
 rm -f "$BUNDLE"
 
