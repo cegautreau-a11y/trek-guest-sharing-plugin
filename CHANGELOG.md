@@ -22,6 +22,20 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ---
 
+## 3.0.0
+
+### Added
+
+- **iCal / WebCal calendar feed** — Trip owners can enable a calendar feed on the plugin link-generation page. When enabled, the guest portal includes a Calendar tab that exposes a subscription URL compatible with Google Calendar, Apple Calendar, Outlook, and any other WebCal client. Feeds auto-update as the TREK itinerary changes.
+
+### Changed
+
+- Companion server VERSION bumped to 3.0.0.
+- Companion public app.js and config.js cache-busting version bumped to 3.0.0.
+- Plugin version bumped to 3.0.0.
+
+---
+
 ## 2.1.1 - 2026-09-06
 
 ### Added

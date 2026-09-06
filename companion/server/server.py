@@ -143,7 +143,7 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "2.1.1"
+VERSION = "3.0.0"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -1075,7 +1075,7 @@ def _sanitize_client_fields(raw) -> dict:
     return out
 
 
-def _new_session(trip_token: str, journey_token: str, title: str, trip_id: str | None) -> tuple[str, dict]:
+def _new_session(trip_token: str, journey_token: str, title: str, trip_id: str | None, enable_ical: bool = False) -> tuple[str, dict]:
     """Create and store a random memory-only guest session."""
     _session_cleanup()
     sid = secrets.token_urlsafe(32)
@@ -1087,6 +1087,7 @@ def _new_session(trip_token: str, journey_token: str, title: str, trip_id: str |
         "journey": journey_token,
         "title": title[:160],
         "trip_id": None if trip_id is None else str(trip_id),
+        "ical": bool(enable_ical),
     }
     with _sessions_lock:
         _sessions[sid] = item
@@ -1927,6 +1928,205 @@ def get_live_flight_payload(reservation: dict, reservation_id: str, trip_id: str
         return json.loads(json.dumps(payload))
 
 
+def _ical_escape(text: str) -> str:
+    """Escape a string for use in an iCal property value."""
+    return text.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
+
+def _ical_dt(value: str | None, is_date: bool = False) -> str:
+    """Format a ISO-8601 datetime string as iCal DTSTART/DTEND value."""
+    if not value:
+        return ""
+    value = value.replace("Z", "").rstrip("Z")
+    if is_date:
+        return value[:10].replace("-", "")
+    return value[:15].replace("-", "").replace(":", "") + "Z"
+
+def _make_uid(kind: str, item_id: str, trip_id: str | None) -> str:
+    safe_id = re.sub(r"[^A-Za-z0-9]", "-", f"{kind}-{item_id}")
+    trip_part = f"{re.sub(r'[^A-Za-z0-9]', '-', str(trip_id or 'unknown'))}-" if trip_id else ""
+    return f"{trip_part}{safe_id}@guest-portal"
+
+def _resolve_accommodation_times(
+    item: dict,
+    assignments: dict,
+    day_dates: dict,
+) -> tuple[str | None, str | None]:
+    """Resolve start/end datetimes for a v4 accommodation using day assignments.
+
+    v4 TREK provides accommodation records with time-only values (``arr_time``,
+    ``dep_time``) and no explicit dates.  The actual dates are carried by the
+    day assignments: each assignment links a ``place_id`` to a ``day_id`` which
+    in turn has a ``date``.  We walk the assignments to find which day(s) the
+    accommodation's place appears on and reconstruct full datetimes from the
+    day date plus the time-only value.
+    """
+    place_id = str(item.get("place_id") or item.get("accommodation_id") or "")
+    if not place_id:
+        return item.get("arr_time"), item.get("dep_time")
+
+    start_dt: str | None = None
+    end_dt: str | None = None
+
+    for day_id, date in day_dates.items():
+        assigned_places = assignments.get(day_id) or []
+        if not isinstance(assigned_places, list):
+            continue
+        for ap in assigned_places:
+            if not isinstance(ap, dict):
+                continue
+            if str(ap.get("place_id") or ap.get("id") or "") != place_id:
+                continue
+            arr_t = str(item.get("arr_time") or "")
+            dep_t = str(item.get("dep_time") or "")
+            start_dt = f"{date}T{arr_t}" if arr_t and not start_dt else start_dt
+            end_dt = f"{date}T{dep_t}" if dep_t and not end_dt else end_dt
+            if start_dt and end_dt:
+                return start_dt, end_dt
+
+    return item.get("arr_time"), item.get("dep_time")
+
+def _build_ical_feed(trip_data: dict, session: dict) -> str:
+    """Generate a VCALENDAR iCal string for the authorized trip."""
+    trip = trip_data.get("trip") or {}
+    trip_id = str(trip.get("id") or "")
+
+    # Build day-id -> date lookup
+    day_dates: dict[str, str] = {}
+    for day in (trip_data.get("days") or []):
+        if isinstance(day, dict) and day.get("id") and day.get("date"):
+            day_dates[str(day["id"])] = str(day["date"])[:10]
+
+    # Build place-id -> assignment map for time resolution
+    raw_assignments: dict = trip_data.get("assignments") or {}
+    # {day_id: [assignment, ...]}
+
+    reservations = trip_data.get("reservations") or []
+    accommodations = trip_data.get("accommodations") or []
+
+    # TRANSPORT_TYPES from app.js
+    TRANSPORT_KINDS = {"flight", "train", "bus", "car", "taxi", "bicycle", "cruise", "ferry"}
+    CAR_TAXI_KINDS = {"car", "taxi"}
+
+    def kind(r: dict) -> str:
+        for k in ("type", "reservation_type", "category"):
+            v = r.get(k)
+            if v is not None and str(v).strip():
+                return str(v).strip().lower()
+        return ""
+
+    items: list[dict] = []
+
+    for r in reservations:
+        k = kind(r)
+        if k in CAR_TAXI_KINDS:
+            continue
+        if k not in TRANSPORT_KINDS:
+            continue
+        items.append({**r, "_kind": k, "_type": "reservation"})
+
+    for a in accommodations:
+        items.append({**a, "_kind": "accommodation", "_type": "accommodation"})
+
+    # Sort by earliest available datetime
+    def sort_key(it: dict) -> float:
+        t = it.get("reservation_time") or it.get("arr_time") or it.get("start_time") or ""
+        try:
+            return time.mktime(time.strptime(t[:19], "%Y-%m-%dT%H:%M:%S"))
+        except Exception:
+            return 0.0
+
+    items.sort(key=sort_key)
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//TREK Guest Portal//NONSGML v3.0.0//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
+    ]
+
+    for item in items:
+        kind_str = item["_kind"]
+        item_id = str(item.get("id") or item.get("reservation_id") or "")
+        uid = _make_uid(kind_str, item_id, trip_id)
+        summary = ""
+
+        if item["_type"] == "reservation":
+            from_loc = str(item.get("from") or item.get("from_location") or "")
+            to_loc = str(item.get("to") or item.get("to_location") or "")
+            if kind_str == "flight":
+                flight = item.get("flight") or ""
+                summary = f"✈ {flight}" if flight else "✈ Flight"
+                if from_loc and to_loc:
+                    summary += f" {from_loc} → {to_loc}"
+            elif kind_str == "train":
+                summary = "🚆 Train"
+                if from_loc and to_loc:
+                    summary += f" {from_loc} → {to_loc}"
+            elif kind_str == "bus":
+                summary = "🚌 Bus"
+                if from_loc and to_loc:
+                    summary += f" {from_loc} → {to_loc}"
+            elif kind_str == "cruise":
+                summary = "🚢 Cruise"
+                if from_loc and to_loc:
+                    summary += f" {from_loc} → {to_loc}"
+            elif kind_str == "ferry":
+                summary = "⛴ Ferry"
+                if from_loc and to_loc:
+                    summary += f" {from_loc} → {to_loc}"
+            elif kind_str == "bicycle":
+                summary = "🚲 Bicycle"
+            else:
+                summary = f"🚗 {kind_str.capitalize()}"
+                if from_loc and to_loc:
+                    summary += f" {from_loc} → {to_loc}"
+
+            start_dt = _ical_dt(item.get("reservation_time"))
+            end_dt = ""
+            # Try legs for flights
+            legs = item.get("legs") or []
+            if legs and isinstance(legs, list):
+                last_leg = legs[-1] if isinstance(legs[-1], dict) else {}
+                end_dt = _ical_dt(last_leg.get("arr_time") or last_leg.get("arrival_time"))
+            if not end_dt:
+                end_dt = _ical_dt(item.get("end_time") or item.get("arrival_time"))
+
+        else:  # accommodation
+            place = item.get("place") or {}
+            name = str(place.get("name") or item.get("name") or "Accommodation")
+            address = str(place.get("address") or item.get("address") or "")
+            summary = f"🏨 {name}"
+            arr_t, dep_t = _resolve_accommodation_times(item, raw_assignments, day_dates)
+            start_dt = _ical_dt(arr_t)
+            end_dt = _ical_dt(dep_t)
+
+        location = ""
+        if item["_type"] == "reservation":
+            location = str(item.get("from") or item.get("from_location") or "")
+        else:
+            place = item.get("place") or {}
+            location = str(place.get("address") or item.get("address") or "")
+
+        notes = str(item.get("notes") or item.get("confirmation_code") or "").strip()
+
+        lines.append("BEGIN:VEVENT")
+        lines.append(f"UID:{uid}")
+        if start_dt:
+            lines.append(f"DTSTART:{start_dt}")
+        if end_dt:
+            lines.append(f"DTEND:{end_dt}")
+        lines.append(f"SUMMARY:{_ical_escape(summary)}")
+        if location:
+            lines.append(f"LOCATION:{_ical_escape(location)}")
+        if notes:
+            lines.append(f"DESCRIPTION:{_ical_escape(notes)}")
+        lines.append("END:VEVENT")
+
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines)
+
 def reservation_kind(item: dict) -> str:
     """Classify a shared TREK reservation into the guest transport/non-transport model."""
     for key in ("type", "reservation_type", "category"):
@@ -1963,6 +2163,45 @@ class Handler(BaseHTTPRequestHandler):
                   "status": code, "bytes": size, "elapsed_ms": elapsed}
         # Do not overwrite the request-context client field with the proxy socket.
         log_event(level, "http.response", **fields)
+
+    def _ical_feed(self, sid: str) -> None:
+        """Return an iCal feed for the session identified by the sid."""
+        with _sessions_lock:
+            session = _sessions.get(sid)
+
+        if not session:
+            self._send_json(404, {"error": "Session not found or expired"})
+            return
+        if not session.get("ical"):
+            self._send_json(403, {"error": "iCal is not enabled for this portal"})
+            return
+
+        trip_token = str(session.get("trip") or "")
+        try:
+            trip_data = get_shared_trip(trip_token, _upstream_host_header())
+        except LookupError:
+            self._send_json(404, {"error": "Trip share link is invalid or expired"})
+            return
+        except Exception as exc:
+            log_event(logging.ERROR, "ical.trip_fetch_failed", error=str(exc))
+            self._send_json(502, {"error": "Trip data unavailable"})
+            return
+
+        ical_body = _build_ical_feed(trip_data, session)
+        filename = f"guest-portal-calendar.ics"
+        safe_name = re.sub(r"[^A-Za-z0-9]", "-", str(session.get("title") or "trip")).strip("-") or "trip"
+        filename = f"{safe_name}.ics"
+
+        body_bytes = ical_body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/calendar; charset=utf-8")
+        self.send_header("Content-Length", str(len(body_bytes)))
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(filename)}")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, private")
+        self.send_header("Pragma", "no-cache")
+        self._security_headers()
+        self.end_headers()
+        self.wfile.write(body_bytes)
 
     def _security_headers(self):
         """Return the security headers applied to guest/static/API responses."""
@@ -2226,6 +2465,7 @@ class Handler(BaseHTTPRequestHandler):
         trip_token = str(body.get("trip") or "").strip()
         journey_token = str(body.get("journey") or "").strip()
         title = str(body.get("title") or "").strip()[:160]
+        enable_ical = bool(body.get("enable_ical"))
         if not TOKEN_RE.fullmatch(trip_token):
             return self._send_json(400, {"error": "Invalid trip share link"})
         if journey_token and not TOKEN_RE.fullmatch(journey_token):
@@ -2246,9 +2486,9 @@ class Handler(BaseHTTPRequestHandler):
                 log_event(logging.ERROR, "session.journey_validation_failed", journey_share=_token_ref(journey_token), error=str(exc))
                 return self._send_json(502, {"error": "Unable to validate Journey share"})
         trip = shared.get("trip") or {}
-        sid, _item = _new_session(trip_token, journey_token, title, trip.get("id"))
+        sid, _item = _new_session(trip_token, journey_token, title, trip.get("id"), enable_ical)
         _metric("sessions_created")
-        log_event(logging.INFO, "session.created", session=_token_ref(sid), trip_share=_token_ref(trip_token), journey=bool(journey_token), expires_in=(SESSION_TTL_SECONDS if SESSION_TTL_SECONDS > 0 else "never"))
+        log_event(logging.INFO, "session.created", session=_token_ref(sid), trip_share=_token_ref(trip_token), journey=bool(journey_token), ical=enable_ical, expires_in=(SESSION_TTL_SECONDS if SESSION_TTL_SECONDS > 0 else "never"))
         return self._send_json(200, {"ok": True, "hasJourney": bool(journey_token)}, {"Set-Cookie": self._set_session_cookie(sid)})
 
     def _logout(self):
@@ -2454,6 +2694,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/health":
             return self._send_json(200, {"ok": True, "version": VERSION})
+        m = re.fullmatch(r"/ical/([A-Za-z0-9_-]{43,})", path)
+        if m:
+            return self._ical_feed(m.group(1))
         if path.startswith("/api/"):
             auth = self._require_session()
             if auth is None:
@@ -2461,6 +2704,11 @@ class Handler(BaseHTTPRequestHandler):
             _sid, session = auth
             if path == "/api/trip":
                 return self._trip_json(session)
+            if path == "/api/ical-link":
+                if not session.get("ical"):
+                    return self._send_json(403, {"error": "iCal is not enabled for this portal"})
+                webcal_url = f"{PUBLIC_ORIGIN}/ical/{_sid}"
+                return self._send_json(200, {"webcal_url": webcal_url})
             if path == "/api/journey":
                 return self._journey_json(session)
             if path == "/api/photo-dates":

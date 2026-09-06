@@ -10,6 +10,7 @@
   let shareToken = '';
   let journeyToken = '';
   let portalTitle = '';
+  let icalEnabled = false;
 
   function readShareFragment() {
     const fragment = new URLSearchParams(location.hash.replace(/^#/, ''));
@@ -17,6 +18,7 @@
       trip: fragment.get('trip') || '',
       journey: fragment.get('journey') || '',
       title: fragment.get('title') || '',
+      ical: fragment.get('ical') === '1',
     };
   }
 
@@ -24,6 +26,7 @@
     shareToken = value.trip;
     journeyToken = value.journey;
     portalTitle = value.title;
+    icalEnabled = value.ical;
     return value;
   }
 
@@ -34,6 +37,7 @@
   let activeTab = 'plan';
   let selectedDay = 'all';
   let searchText = '';
+  let icalLink = '';
   const portalConfig = window.GUEST_PORTAL_CONFIG || {};
   let map = null;
   let mapReady = false;
@@ -381,7 +385,7 @@ async function establishGuestSession() {
     credentials: 'same-origin',
     cache: 'no-store',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ trip: shareToken, journey: journeyToken, title: portalTitle }),
+    body: JSON.stringify({ trip: shareToken, journey: journeyToken, title: portalTitle, enable_ical: icalEnabled }),
   });
   if (!res.ok) {
     let detail = '';
@@ -389,7 +393,7 @@ async function establishGuestSession() {
     throw new Error(detail || `Session request failed (${res.status})`);
   }
   enableTelemetry();
-  clientLog('session.established', { has_journey: !!journeyToken, api_req: res.headers.get('X-Guest-Request-ID') || '' });
+  clientLog('session.established', { has_journey: !!journeyToken, ical: icalEnabled, api_req: res.headers.get('X-Guest-Request-ID') || '' });
   // Keep the original share fragment in the address bar after the session is
   // established. The fragment is not included in HTTP request URLs, but it is
   // required to reconstruct the guest session after a refresh, companion
@@ -412,10 +416,12 @@ async function load(options = {}) {
     if (shareToken) await establishGuestSession();
     const tripPromise = fetchJson('api/trip');
     const journeyPromise = fetchJson('api/journey').catch(() => null);
-    const data = await Promise.all([tripPromise, journeyPromise]);
+    const icalPromise = icalEnabled ? fetchJson('api/ical-link').catch(() => null) : Promise.resolve(null);
+    const data = await Promise.all([tripPromise, journeyPromise, icalPromise]);
     if (serial !== loadSerial) return;
     tripData = data[0];
     journeyData = data[1] || null;
+    icalLink = (data[2] && data[2].webcal_url) || '';
     gallery = journeyData?.permissions?.share_gallery ? buildChronologicalGallery(journeyData, photoCaptureDates) : [];
     clientLog('portal.data_loaded', { days: asArray(tripData?.days).length, reservations: asArray(tripData?.reservations).length, accommodations: asArray(tripData?.accommodations).length, journey: !!journeyData, photos: gallery.length });
     renderShell();
@@ -449,6 +455,64 @@ function fatal(message) {
     } catch (err) {
       clientLog('photos.date_enrichment_failed', { message: String(err?.message || 'date enrichment failed').slice(0,180) }, 'warning');
       // Embedded capture-date enrichment is best-effort. Entry/import dates remain usable.
+    }
+  }
+
+  function renderCalendar(content) {
+    const trip = tripData?.trip || {};
+    const title = esc(trip.title || trip.name || 'Trip');
+    content.innerHTML = `
+      <h2 class="section-title">Calendar Feed</h2>
+      <p class="section-lead">Subscribe to your trip itinerary in any calendar app that supports iCal / WebCal feeds.</p>
+
+      <div class="calendar-instructions">
+        <h3>Your WebCal Link</h3>
+        <div class="webcal-url-box">
+          <code id="ical-url">${icalLink ? esc(icalLink) : '<em>Not available</em>'}</code>
+          ${icalLink ? `<button class="btn-copy" id="copy-ical" type="button">Copy</button>` : ''}
+        </div>
+
+        <h4>Google Calendar</h4>
+        <ol>
+          <li>Open <a href="https://calendar.google.com" target="_blank" rel="noopener">Google Calendar</a> on the web.</li>
+          <li>Next to "Other calendars" in the left panel, click <strong>+ Add other calendars</strong> → <strong>From URL</strong>.</li>
+          <li>Paste the WebCal link above and click <strong>Add calendar</strong>.</li>
+        </ol>
+
+        <h4>Apple Calendar (macOS / iOS)</h4>
+        <ol>
+          <li>Open Apple Calendar.</li>
+          <li>Go to <strong>File</strong> → <strong>New Calendar Subscription</strong>.</li>
+          <li>Paste the WebCal link and click <strong>Subscribe</strong>.</li>
+        </ol>
+
+        <h4>Outlook (Web / Desktop)</h4>
+        <ol>
+          <li>Open Outlook.</li>
+          <li>Click <strong>Add calendar</strong> → <strong>Subscribe from web</strong>.</li>
+          <li>Paste the WebCal link and configure the calendar name and colour as you like.</li>
+        </ol>
+
+        <h4>Other CalDAV Clients</h4>
+        <p>Your calendar app should accept a WebCal (<code>webcal://</code>) URL or the HTTPS subscription link shown above. Paste it where the app asks for the feed URL.</p>
+
+        <div class="info-box">
+          <strong>Auto-updates:</strong> The calendar refreshes automatically as the trip owner updates the TREK itinerary. Depending on your calendar app, updates may appear within a few minutes.
+        </div>
+      </div>
+    `;
+
+    const copyBtn = document.getElementById('copy-ical');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(icalLink).then(() => {
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+        }).catch(() => {
+          copyBtn.textContent = 'Failed';
+          setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+        });
+      });
     }
   }
 
@@ -555,6 +619,7 @@ function fatal(message) {
     defs.push({ id: 'cars-taxis', label: 'Cars & Taxis', show: carsAndTaxis.length > 0, count: carsAndTaxis.length });
     defs.push({ id: 'reservations', label: 'Reservations', show: true, count: reservations.length + accommodations.length });
     defs.push({ id: 'photos', label: 'Photos', show: !!journeyData?.permissions?.share_gallery, count: gallery.length });
+    defs.push({ id: 'calendar', label: 'Calendar', show: icalEnabled });
     return defs.filter(x => x.show);
   }
 
@@ -641,6 +706,7 @@ function fatal(message) {
     else if (id === 'cars-taxis') renderCarsAndTaxis(content);
     else if (id === 'reservations') renderReservations(content);
     else if (id === 'photos') renderPhotos(content);
+    else if (id === 'calendar') renderCalendar(content);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 

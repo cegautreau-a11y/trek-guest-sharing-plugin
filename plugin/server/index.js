@@ -137,7 +137,7 @@ async function requireTripAccess(ctx, tripId) {
 async function getPortal(ctx, tripId) {
   const rows = await ctx.db.query(
     `SELECT trip_id, portal_token, share_token, journey_token, title, enabled,
-            portal_base, created_at, updated_at
+            portal_base, enable_ical, created_at, updated_at
        FROM portals WHERE trip_id = ?`,
     String(tripId),
   );
@@ -155,6 +155,7 @@ function publicPortal(row) {
     journeyToken: row.journey_token || '',
     title: row.title || '',
     portalBase: row.portal_base || '/guest-portal/',
+    enableIcal: Boolean(row.enable_ical),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -186,7 +187,10 @@ module.exports = definePlugin({
     await ctx.db.migrate('002_portal_base', `
       ALTER TABLE portals ADD COLUMN portal_base TEXT
     `);
-    ctx.log.info('Guest Portal v2.1.1 loaded');
+    await ctx.db.migrate('003_enable_ical', `
+      ALTER TABLE portals ADD COLUMN enable_ical INTEGER NOT NULL DEFAULT 0
+    `);
+    ctx.log.info('Guest Portal v3.0.0 loaded');
   },
 
   routes: [
@@ -229,12 +233,13 @@ module.exports = definePlugin({
         try {
           const body = parseBody(req);
           tripId = String(body.tripId || '');
-          ctx.log.info(`Guest Portal config write start trip=${tripId || 'missing'} has_trip_share=${Boolean(body.tripShare)} has_journey_share=${Boolean(body.journeyShare)} has_portal_base=${Boolean(body.portalBase)}`);
+          ctx.log.info(`Guest Portal config write start trip=${tripId || 'missing'} has_trip_share=${Boolean(body.tripShare)} has_journey_share=${Boolean(body.journeyShare)} has_portal_base=${Boolean(body.portalBase)} has_enable_ical=${body.enableIcal !== undefined}`);
           const trip = await requireTripAccess(ctx, tripId);
           const shareToken = cleanToken(body.tripShare, 'trip');
           const journeyToken = cleanToken(body.journeyShare, 'journey');
           const portalBase = cleanPortalBase(body.portalBase);
           const title = String(body.title || '').trim().slice(0, 160);
+          const enableIcal = Boolean(body.enableIcal);
 
           if (!shareToken) {
             return json(400, { error: 'A valid TREK Trip Share URL or token is required.' });
@@ -248,25 +253,27 @@ module.exports = definePlugin({
             await ctx.db.exec(
               `UPDATE portals
                   SET share_token = ?, journey_token = ?, title = ?, portal_base = ?,
-                      enabled = 1, updated_at = CURRENT_TIMESTAMP
+                      enable_ical = ?, enabled = 1, updated_at = CURRENT_TIMESTAMP
                 WHERE trip_id = ?`,
               shareToken,
               journeyToken || null,
               title || trip.title || trip.name || '',
               portalBase,
+              enableIcal ? 1 : 0,
               tripId,
             );
           } else {
             await ctx.db.exec(
               `INSERT INTO portals
-                 (trip_id, portal_token, share_token, journey_token, title, enabled, portal_base)
-               VALUES (?, ?, ?, ?, ?, 1, ?)`,
+                 (trip_id, portal_token, share_token, journey_token, title, enabled, portal_base, enable_ical)
+               VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
               tripId,
               legacyPortalToken(),
               shareToken,
               journeyToken || null,
               title || trip.title || trip.name || '',
               portalBase,
+              enableIcal ? 1 : 0,
             );
           }
 
