@@ -7,3 +7,4 @@ cache/
 secrets/
 tests/
 .DS_Store
+CONTRIBUTING.md
