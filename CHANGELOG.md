@@ -27,16 +27,32 @@ All notable project changes represented by TREK Guest Portal releases are docume
 ### Added
 
 - Added a root-level `docker-compose.yml` for deployments started from the project root.
+- Added a required-version bug-report template and documented root-level Compose setup.
 
 ### Changed
 
-- Updated release metadata, documentation, and package artifacts to 2.0.2.
-- Added the missing Compose environment defaults to `.env.example`.
+- Updated plugin compatibility to support TREK `>=4.0.0 <5.0.0`.
+- Updated release metadata, documentation, cache-busting markers, and package artifacts to 2.0.2.
+- Added all Compose interpolation defaults to `.env.example`, including proxy-trust, cache, provider, and upstream timeout settings.
+- Added clear Guest Portal guidance for enabling TREK Bookings and Journey Gallery sharing; native share permissions remain authoritative.
+- Added accommodation fallback handling for TREK v4 shares that expose standalone `hotel` reservations instead of a separate accommodations collection.
 
 ### Fixed
 
-- Completed sparse TREK v4 flight metadata from ordered endpoints so all itinerary legs render.
+- Completed sparse TREK v4 flight metadata from ordered endpoints so first, intermediate, and final itinerary legs render consistently.
+- Filled missing leg fields from adjacent endpoint and reservation metadata while preserving the six-leg safety limit.
 - Kept local tests, virtual environments, and generated release archives out of Git.
+
+### Validation
+
+- Added regression coverage for endpoint-derived flight segments and partial explicit leg metadata.
+- Revalidated Python and JavaScript syntax, TREK/plugin version consistency, Compose configuration, documentation links, package contents, and release hygiene.
+- Rebuilt the plugin and companion archives as `trek-guest-portal-2.0.2.zip` and `trek-guest-portal-companion-2.0.2.zip`.
+
+### Security
+
+- Guest Portal remains read-only and continues to exchange native TREK/Journey share capabilities for an HttpOnly guest session.
+- Share permissions are checked server-side; disabling Bookings or Gallery sharing prevents the corresponding guest data from being exposed.
 
 ---
 
