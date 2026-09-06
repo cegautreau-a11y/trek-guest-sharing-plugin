@@ -22,6 +22,18 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ---
 
+## 2.0.3 - 2026-09-06
+
+### Fixed
+
+- Restored accommodation Check-in and Check-out dates for TREK v4 hotel reservations that provide dates through day IDs or place assignments instead of explicit reservation date fields.
+
+### Validation
+
+- Rebuilt the plugin and companion release archives for 2.0.3.
+
+---
+
 ## 2.0.2 - 2026-09-06
 
 ### Added

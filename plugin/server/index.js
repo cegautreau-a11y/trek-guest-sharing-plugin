@@ -186,7 +186,7 @@ module.exports = definePlugin({
     await ctx.db.migrate('002_portal_base', `
       ALTER TABLE portals ADD COLUMN portal_base TEXT
     `);
-    ctx.log.info('Guest Portal v2.0.2 loaded');
+    ctx.log.info('Guest Portal v2.0.3 loaded');
   },
 
   routes: [

@@ -1,6 +1,6 @@
 # Prerequisites
 
-Before installing TREK Guest Portal 2.0.2, confirm the following.
+Before installing TREK Guest Portal 2.0.3, confirm the following.
 
 ## 1. Supported TREK deployment
 
