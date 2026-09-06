@@ -33,6 +33,9 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from timezonefinder import TimezoneFinderL
+
+_TF = TimezoneFinderL(in_memory=True)
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -173,6 +176,48 @@ def _resolve_airport_timezone(airport_code: str) -> str | None:
     """Return IANA timezone for an airport code, or None if unknown."""
     return _AIRPORT_TZ.get(airport_code.upper())
 
+
+def _resolve_gps_timezone(trip_data: dict, location_name: str) -> str | None:
+    """Resolve timezone from a location name using GPS coordinates from the place database.
+
+    Looks up ``location_name`` in the trip's assignments/places to find lat/lng, then
+    uses TimezoneFinderL to return the IANA timezone.  Returns None if no coordinates
+    are found.
+    """
+    if not location_name:
+        return None
+    # Normalise so lookups are case-insensitive.
+    needle = location_name.strip().lower()
+    # Walk places from assignments.
+    for day_id, assigns in (trip_data.get("assignments") or {}).items():
+        for ap in (assigns or []):
+            p = ap.get("place") or {}
+            name = str(p.get("name") or "").strip().lower()
+            if name and name == needle:
+                try:
+                    lat = float(p.get("lat") or p.get("latitude") or "")
+                    lng = float(p.get("lng") or p.get("lon") or p.get("longitude") or "")
+                except (TypeError, ValueError):
+                    lat, lng = None, None
+                if lat is not None and lng is not None:
+                    tz = _TF.certain_timezone_at(lat=lat, lng=lng)
+                    if tz:
+                        return tz
+    # Walk standalone places list.
+    for p in (trip_data.get("places") or []):
+        name = str(p.get("name") or "").strip().lower()
+        if name and name == needle:
+            try:
+                lat = float(p.get("lat") or p.get("latitude") or "")
+                lng = float(p.get("lng") or p.get("lon") or p.get("longitude") or "")
+            except (TypeError, ValueError):
+                lat, lng = None, None
+            if lat is not None and lng is not None:
+                tz = _TF.certain_timezone_at(lat=lat, lng=lng)
+                if tz:
+                    return tz
+    return None
+
 # The public companion never mounts or reads TREK plugin databases at runtime.
 # The bundled one-shot helper may be used manually to copy a provider key into
 # the dedicated secret file before this container starts.
@@ -221,7 +266,7 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.2.0"
+VERSION = "3.3.0"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -2095,7 +2140,6 @@ def _build_ical_feed(trip_data: dict, session: dict) -> str:
 
     # TRANSPORT_TYPES from app.js
     TRANSPORT_KINDS = {"flight", "train", "bus", "car", "taxi", "bicycle", "cruise", "ferry"}
-    CAR_TAXI_KINDS = {"car", "taxi"}
 
     def kind(r: dict) -> str:
         for k in ("type", "reservation_type", "category"):
@@ -2108,8 +2152,6 @@ def _build_ical_feed(trip_data: dict, session: dict) -> str:
 
     for r in reservations:
         k = kind(r)
-        if k in CAR_TAXI_KINDS:
-            continue
         if k not in TRANSPORT_KINDS:
             continue
         items.append({**r, "_kind": k, "_type": "reservation"})
@@ -2174,9 +2216,9 @@ def _build_ical_feed(trip_data: dict, session: dict) -> str:
                 if from_loc and to_loc:
                     summary += f" {from_loc} → {to_loc}"
 
-            # Resolve per-event timezone from departure/arrival airport codes.
-            from_tz = _resolve_airport_timezone(from_loc) or ICAL_TIMEZONE
-            to_tz = _resolve_airport_timezone(to_loc) or ICAL_TIMEZONE
+            # Resolve per-event timezone: airport code first, then GPS via place coordinates.
+            from_tz = _resolve_airport_timezone(from_loc) or _resolve_gps_timezone(trip_data, from_loc) or ICAL_TIMEZONE
+            to_tz = _resolve_airport_timezone(to_loc) or _resolve_gps_timezone(trip_data, to_loc) or ICAL_TIMEZONE
             start_dt, start_tz = _ical_dt(item.get("reservation_time"), from_tz)
             end_dt, end_tz = "", ""
             # For flights, arrival time is in destination timezone; fallback uses departure tz.

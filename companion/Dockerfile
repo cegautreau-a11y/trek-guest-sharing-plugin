@@ -2,6 +2,7 @@ FROM python:3.12-alpine
 
 WORKDIR /srv
 COPY public /srv/public
+RUN pip install --no-cache-dir timezonefinder==6.5.9
 RUN cp /srv/public/config.js.example /srv/public/config.js
 COPY server /srv/server
 

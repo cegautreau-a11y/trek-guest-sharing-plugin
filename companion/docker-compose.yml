@@ -1,4 +1,4 @@
-# TREK Guest Portal v3.2.0
+# TREK Guest Portal v3.3.0
 #
 # This is a standalone Docker Compose project. The companion joins TREK's
 # existing Docker network so TREK_HOST (normally "app") resolves through
