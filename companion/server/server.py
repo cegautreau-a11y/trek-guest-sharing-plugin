@@ -38,14 +38,21 @@ try:
     from timezonefinder import TimezoneFinderL
     _TF = TimezoneFinderL(in_memory=True)
 except ModuleNotFoundError:
-    import logging
-    _log = logging.getLogger("trek.guest")
-    _log.warning("timezonefinder not found — installing at runtime")
+    import logging as _logging
+    _log = _logging.getLogger("trek.guest")
+    _log.warning("timezonefinder not found — attempting runtime install")
     import subprocess
-    subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "--no-cache-dir", "timezonefinder"], check=True)
-    from timezonefinder import TimezoneFinderL  # noqa: F401
-    _TF = TimezoneFinderL(in_memory=True)
-    _log.info("timezonefinder installed and loaded")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "--no-cache-dir", "timezonefinder"],
+            check=True,
+        )
+        from timezonefinder import TimezoneFinderL  # noqa: F401
+        _TF = TimezoneFinderL(in_memory=True)
+        _log.info("timezonefinder installed and loaded")
+    except subprocess.CalledProcessError as _exc:
+        _log.error("timezonefinder install failed (exit %d) — GPS timezone lookup disabled", _exc.returncode)
+        _TF = None
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -195,6 +202,8 @@ def _resolve_gps_timezone(trip_data: dict, location_name: str) -> str | None:
     are found.
     """
     if not location_name:
+        return None
+    if _TF is None:
         return None
     # Normalise so lookups are case-insensitive.
     needle = location_name.strip().lower()
