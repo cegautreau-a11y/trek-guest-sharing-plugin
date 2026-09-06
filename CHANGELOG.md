@@ -26,7 +26,8 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ### Fixed
 
-- Deduplicated native accommodations and standalone TREK v4 hotel reservations by place, name, and address when `reservation_id` linkage is absent, preventing duplicate hotel cards and conflicting date/time entries.
+- Deduplicated native accommodations and standalone TREK v4 hotel reservations by shared place, name, and address identity when `reservation_id` linkage is absent, preventing duplicate hotel cards and conflicting date/time entries.
+- Combined time-only accommodation values with TREK day dates so Check-in and Check-out show the correct stay dates instead of standalone times.
 
 ### Validation
 

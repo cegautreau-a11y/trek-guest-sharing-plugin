@@ -500,22 +500,25 @@ function fatal(message) {
       .map(String));
   }
 
-  function accommodationIdentity(a) {
+  function accommodationIdentityKeys(a) {
     const placeId = a?.place_id ?? a?.place?.id;
-    if (placeId != null && placeId !== '') return `place:${placeId}`;
     const title = normalizeLocationMatch(text(a?.place_name, a?.title, a?.name));
     const address = normalizeLocationMatch(text(a?.place_address, a?.address, a?.location));
-    if (title && !['hotel', 'accommodation'].includes(title)) return `name:${title}|address:${address}`;
-    return address ? `address:${address}` : '';
+    const keys = [];
+    if (placeId != null && placeId !== '') keys.push(`place:${placeId}`);
+    if (title && !['hotel', 'accommodation'].includes(title)) keys.push(`name:${title}`);
+    if (title && address) keys.push(`name:${title}|address:${address}`);
+    if (address) keys.push(`address:${address}`);
+    return keys;
   }
 
   function hotelReservations() {
     const linkedIds = linkedAccommodationReservationIds();
-    const accommodationKeys = new Set(asArray(tripData?.accommodations).map(accommodationIdentity).filter(Boolean));
+    const accommodationKeys = new Set(asArray(tripData?.accommodations).flatMap(accommodationIdentityKeys));
     return asArray(tripData?.reservations).filter(r =>
       reservationType(r) === 'hotel' &&
       !linkedIds.has(String(r?.id)) &&
-      !accommodationKeys.has(accommodationIdentity(r))
+      !accommodationIdentityKeys(r).some(key => accommodationKeys.has(key))
     );
   }
 
@@ -970,16 +973,26 @@ function fatal(message) {
     return '';
   }
 
+  function accommodationDateTime(value, dayId) {
+    const dayDate = accommodationDayDate(dayId);
+    if (!dayDate || !value) return value;
+    const raw = String(value).trim();
+    return /^\d{1,2}:\d{2}(?::\d{2})?$/.test(raw) ? `${dayDate}T${raw}` : raw;
+  }
+
   function accommodationCheckIn(a) {
     const meta = accommodationMeta(a);
     const startDayId = accommodationStartDayId(a) || accommodationAssignmentDayId(a);
-    return text(a?.check_in, a?.checkin, a?.check_in_date, a?.checkin_date, a?.reservation_time, a?.start_time, a?.start_date, meta.check_in, meta.checkin, meta.check_in_date, meta.checkin_date, accommodationDayDate(startDayId));
+    const value = text(a?.check_in, a?.checkin, a?.check_in_date, a?.checkin_date, a?.reservation_time, a?.start_time, a?.start_date, meta.check_in, meta.checkin, meta.check_in_date, meta.checkin_date);
+    return accommodationDateTime(value, startDayId) || accommodationDayDate(startDayId);
   }
 
   function accommodationCheckOut(a) {
     const meta = accommodationMeta(a);
     const startDayId = accommodationStartDayId(a) || accommodationAssignmentDayId(a);
-    return text(a?.check_out, a?.checkout, a?.check_out_date, a?.checkout_date, a?.reservation_end_time, a?.end_time, a?.end_date, meta.check_out, meta.checkout, meta.check_out_date, meta.checkout_date, accommodationDayDate(accommodationEndDayId(a)), accommodationNextDayDate(startDayId));
+    const endDayId = accommodationEndDayId(a);
+    const value = text(a?.check_out, a?.checkout, a?.check_out_date, a?.checkout_date, a?.reservation_end_time, a?.end_time, a?.end_date, meta.check_out, meta.checkout, meta.check_out_date, meta.checkout_date);
+    return accommodationDateTime(value, endDayId) || accommodationDayDate(endDayId) || accommodationNextDayDate(startDayId);
   }
 
   function accommodationStartDayId(a) {
