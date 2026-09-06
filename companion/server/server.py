@@ -2098,7 +2098,7 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
     """
     if not value:
         return "", ""
-    value = value.replace("Z", "").rstrip("Z")
+    value = value.replace("Z", "").rstrip("Z").rstrip(":")
     # Ensure seconds are present so fromisoformat parses correctly.
     if len(value) == 16:  # YYYY-MM-DDTHH:MM
         value = value + ":00"
