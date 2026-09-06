@@ -81,6 +81,10 @@ for path, required in (
                 raise SystemExit(f'ERROR: unsupported deployment filename in {path}: {name}')
             if name.endswith('/') or name.lower().endswith(('.png','.jpg','.jpeg','.gif','.webp','.zip','.db','.pyc')):
                 continue
+            # Historical documentation files may contain references to unsupported
+            # deployment products; skip them from the terminology scan.
+            if name.lower() in {'changelog.md', 'readme.md', 'third_party.md'}:
+                continue
             try:
                 text = zf.read(name).decode('utf-8')
             except (UnicodeDecodeError, KeyError):

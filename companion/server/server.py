@@ -403,7 +403,7 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.4.1"
+VERSION = "3.4.2"
 PRODID = "-//TREK Guest Portal//NONSGML v3.3.12//EN"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
@@ -2272,6 +2272,7 @@ def _tz_offset(tz_name: str) -> int | None:
 
 
 def _make_uid(kind: str, item_id: str, trip_id: str | None) -> str:
+    """Generate a safe unique identifier for a trip item."""
     safe_id = re.sub(r"[^A-Za-z0-9]", "-", f"{kind}-{item_id}")
     trip_part = f"{re.sub(r'[^A-Za-z0-9]', '-', str(trip_id or 'unknown'))}-" if trip_id else ""
     return f"{trip_part}{safe_id}@guest-portal"
@@ -2337,6 +2338,7 @@ def _build_ical_feed(trip_data: dict) -> str:
     TRANSPORT_KINDS = {"flight", "train", "bus", "car", "taxi", "bicycle", "cruise", "ferry"}
 
     def kind(r: dict) -> str:
+        """Extract the transport kind from a reservation dict."""
         for k in ("type", "reservation_type", "category"):
             v = r.get(k)
             if v is not None and str(v).strip():
@@ -2356,6 +2358,7 @@ def _build_ical_feed(trip_data: dict) -> str:
 
     # Sort by earliest available datetime
     def sort_key(it: dict) -> float:
+        """Return timestamp for sorting trip items by start time."""
         t = it.get("reservation_time") or it.get("arr_time") or it.get("start_time") or ""
         try:
             return time.mktime(time.strptime(t[:19], "%Y-%m-%dT%H:%M:%S"))

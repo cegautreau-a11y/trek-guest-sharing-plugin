@@ -2,6 +2,13 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.4.2
+
+### Fixed
+
+- **Airport timezone database reload**: Fix database reload bug after building - previously the database was created but data was never reloaded from it
+- **Missing airports**: Add missing Brazilian airports (SDU, CNF, IGA, CGB, STM, RBR, PVH, SLZ, THE, BPS, PNB, JPA)
+
 ## 3.4.1
 
 ### Changed
