@@ -2,12 +2,13 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.3.4
+
+### Changed
+
+- **iCal URL is now stable across redeployments**: The iCal feed URL is now derived from the trip's share token instead of an ephemeral in-memory session ID. Previously, every container restart/redeploy invalidated all active session IDs, causing the iCal URL to change and breaking Google Calendar subscriptions. The feed still validates against TREK on every request so security is unchanged.
+
 ## 3.3.3
-
-### Fixed
-
-- **iCal DTSTAMP required by RFC 5545**: Added `DTSTAMP` to every `VEVENT` block. Google Calendar ignores events without a `DTSTAMP`.
-- **Timezone validation**: `ZoneInfo("DST")` silently succeeds with an invalid timezone instead of raising an exception, causing the seconds-padding fallback to be skipped. Now validates the timezone with `utcoffset()` before use.
 
 ## 3.3.2
 

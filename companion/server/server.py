@@ -268,7 +268,7 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.3.3"
+VERSION = "3.3.4"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -2128,8 +2128,8 @@ def _resolve_accommodation_times(
 
     return item.get("arr_time"), item.get("dep_time")
 
-def _build_ical_feed(trip_data: dict, session: dict) -> str:
-    """Generate a VCALENDAR iCal string for the authorized trip."""
+def _build_ical_feed(trip_data: dict) -> str:
+    """Generate a VCALENDAR iCal string for the trip identified by the given token."""
     trip = trip_data.get("trip") or {}
     trip_id = str(trip.get("id") or "")
 
@@ -2180,7 +2180,7 @@ def _build_ical_feed(trip_data: dict, session: dict) -> str:
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//TREK Guest Portal//NONSGML v3.3.3//EN",
+        "PRODID:-//TREK Guest Portal//NONSGML v3.3.4//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
@@ -2312,19 +2312,15 @@ class Handler(BaseHTTPRequestHandler):
         # Do not overwrite the request-context client field with the proxy socket.
         log_event(level, "http.response", **fields)
 
-    def _ical_feed(self, sid: str) -> None:
-        """Return an iCal feed for the session identified by the sid."""
-        with _sessions_lock:
-            session = _sessions.get(sid)
+    def _ical_feed(self, trip_token: str) -> None:
+        """Return an iCal feed for the trip identified by the trip share token.
 
-        if not session:
-            self._send_json(404, {"error": "Session not found or expired"})
+        The token is validated against TREK on every request so the feed URL is
+        stable across redeployments — it does not depend on in-memory sessions.
+        """
+        if not TOKEN_RE.fullmatch(trip_token):
+            self._send_json(404, {"error": "Trip share link is invalid or expired"})
             return
-        if not session.get("ical"):
-            self._send_json(403, {"error": "iCal is not enabled for this portal"})
-            return
-
-        trip_token = str(session.get("trip") or "")
         try:
             trip_data = get_shared_trip(trip_token, _upstream_host_header())
         except LookupError:
@@ -2335,9 +2331,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(502, {"error": "Trip data unavailable"})
             return
 
-        ical_body = _build_ical_feed(trip_data, session)
+        ical_body = _build_ical_feed(trip_data)
         filename = f"guest-portal-calendar.ics"
-        safe_name = re.sub(r"[^A-Za-z0-9]", "-", str(session.get("title") or "trip")).strip("-") or "trip"
+        trip_title = str((trip_data.get("trip") or {}).get("title") or (trip_data.get("trip") or {}).get("name") or "trip")
+        safe_name = re.sub(r"[^A-Za-z0-9]", "-", trip_title).strip("-") or "trip"
         filename = f"{safe_name}.ics"
 
         body_bytes = ical_body.encode("utf-8")
@@ -2848,7 +2845,7 @@ class Handler(BaseHTTPRequestHandler):
                 path = "/" + path
         if path == "/health":
             return self._send_json(200, {"ok": True, "version": VERSION})
-        m = re.fullmatch(r"/ical/([A-Za-z0-9_-]{42,})", path)
+        m = re.fullmatch(r"/ical/([A-Za-z0-9_-]{8,256})", path)
         if m:
             return self._ical_feed(m.group(1))
         if path.startswith("/api/"):
@@ -2861,7 +2858,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/ical-link":
                 if not session.get("ical"):
                     return self._send_json(403, {"error": "iCal is not enabled for this portal"})
-                webcal_url = f"{PUBLIC_ORIGIN}{GUEST_PLUGIN_PATH}ical/{_sid}"
+                trip_token = str(session.get("trip") or "")
+                webcal_url = f"{PUBLIC_ORIGIN}{GUEST_PLUGIN_PATH}ical/{trip_token}"
                 return self._send_json(200, {"webcal_url": webcal_url})
             if path == "/api/journey":
                 return self._journey_json(session)
