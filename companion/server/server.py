@@ -2866,8 +2866,7 @@ class Handler(BaseHTTPRequestHandler):
                     out.append({
                         "id": r.get("id") or r.get("reservation_id"),
                         "kind": kind,
-                        "from": r.get("from") or r.get("from_location"),
-                        "to": r.get("to") or r.get("to_location"),
+                        "all_keys": list(r.keys()),
                         "time": r.get("reservation_time") or r.get("start_time"),
                     })
             return self._send_json(200, {"token": token, "reservations": out})
