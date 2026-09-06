@@ -31,6 +31,8 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
@@ -103,6 +105,74 @@ SESSION_COOKIE_NAME = "trek_guest_session"
 # the primary timezone of the trip (e.g. America/New_York, Europe/London).
 ICAL_TIMEZONE = os.environ.get("ICAL_TIMEZONE", "UTC").strip()
 
+# Airport code → IANA timezone mapping for per-event timezone conversion in iCal feeds.
+_AIRPORT_TZ: dict[str, str] = {
+    # Brazil
+    "GRU": "America/Sao_Paulo", "GIG": "America/Sao_Paulo", "CGH": "America/Sao_Paulo",
+    "BSB": "America/Sao_Paulo", "SSA": "America/Bahia", "CWB": "America/Sao_Paulo",
+    "POA": "America/Sao_Paulo", "FLN": "America/Sao_Paulo", "REC": "America/Recife",
+    "FOR": "America/Fortaleza", "MAO": "America/Manaus", "BEL": "America/Belem",
+    "NAT": "America/Recife", "MCZ": "America/Maceio", "JPQ": "America/Sao_Paulo",
+    "NVT": "America/Sao_Paulo", "RBE": "America/Sao_Paulo",
+    # Canada
+    "YYZ": "America/Toronto", "Yyz": "America/Toronto", "YUL": "America/Montreal",
+    "YVR": "America/Vancouver", "YWG": "America/Winnipeg", "YEG": "America/Edmonton",
+    "YOW": "America/Toronto", "YQB": "America/Toronto", "YTZ": "America/Toronto",
+    "YYC": "America/Edmonton", "YHZ": "America/Halifax", "YQR": "America/Regina",
+    "YXY": "America/Whitehorse", "YEG": "America/Edmonton",
+    # United States
+    "JFK": "America/New_York", "LAX": "America/Los_Angeles", "ORD": "America/Chicago",
+    "DFW": "America/Chicago", "DEN": "America/Denver", "SFO": "America/Los_Angeles",
+    "SEA": "America/Los_Angeles", "LAS": "America/Los_Angeles", "MCO": "America/New_York",
+    "MIA": "America/New_York", "ATL": "America/New_York", "BOS": "America/New_York",
+    "PHL": "America/New_York", "EWR": "America/New_York", "LGA": "America/New_York",
+    "DCA": "America/New_York", "IAD": "America/New_York", "MSP": "America/Chicago",
+    "DTW": "America/Detroit", "PHX": "America/Phoenix", "IAH": "America/Chicago",
+    "SAN": "America/Los_Angeles", "TUS": "America/Phoenix", "PDX": "America/Los_Angeles",
+    "AUS": "America/Chicago", "MSY": "America/Chicago", "BWI": "America/New_York",
+    "SLC": "America/Denver", "IND": "America/Indiana/Indianapolis", "CMH": "America/Indiana/Indianapolis",
+    "CLE": "America/New_York", "RIC": "America/New_York", "BNA": "America/Chicago",
+    "RDU": "America/New_York", "CAI": "Africa/Cairo",
+    # Europe
+    "LHR": "Europe/London", "LGW": "Europe/London", "STN": "Europe/London", "LTN": "Europe/London",
+    "CDG": "Europe/Paris", "ORY": "Europe/Paris",
+    "FRA": "Europe/Berlin", "MUC": "Europe/Berlin",
+    "AMS": "Europe/Amsterdam", "MAD": "Europe/Madrid", "BCN": "Europe/Madrid",
+    "FCO": "Europe/Rome", "MXP": "Europe/Rome",
+    "ZRH": "Europe/Zurich", "VIE": "Europe/Vienna", "BRU": "Europe/Brussels",
+    "DUB": "Europe/Dublin", "CPH": "Europe/Copenhagen", "OSL": "Europe/Oslo",
+    "ARN": "Europe/Stockholm", "HEL": "Europe/Helsinki", "WAW": "Europe/Warsaw",
+    "PRG": "Europe/Prague", "BUD": "Europe/Budapest", "ATH": "Europe/Athens",
+    "IST": "Europe/Istanbul",
+    # Asia / Pacific
+    "HND": "Asia/Tokyo", "NRT": "Asia/Tokyo", "KIX": "Asia/Tokyo",
+    "PVG": "Asia/Shanghai", "SHA": "Asia/Shanghai", "PEK": "Asia/Shanghai",
+    "HKG": "Asia/Hong_Kong", "ICN": "Asia/Seoul", "GMP": "Asia/Seoul",
+    "SIN": "Asia/Singapore", "BKK": "Asia/Bangkok", "KUL": "Asia/Kuala_Lumpur",
+    "DEL": "Asia/Kolkata", "BOM": "Asia/Kolkata", "MAA": "Asia/Kolkata",
+    "DXB": "Asia/Dubai", "AUH": "Asia/Dubai", "DOH": "Asia/Qatar",
+    "TLV": "Asia/Jerusalem", "JFK": "America/New_York",
+    "SYD": "Australia/Sydney", "MEL": "Australia/Melbourne", "BNE": "Australia/Brisbane",
+    "PER": "Australia/Perth", "AKL": "Pacific/Auckland",
+    # South / Central America
+    "EZE": "America/Argentina/Buenos_Aires", "AEP": "America/Argentina/Buenos_Aires",
+    "SCL": "America/Santiago", "LIM": "America/Lima", "BOG": "America/Bogota",
+    "MDE": "America/Bogota", "CLO": "America/Bogota", "GYE": "America/Guayaquil",
+    "UIO": "America/Guayaquil", "MEX": "America/Mexico_City", "CUN": "America/Cancun",
+    "GDL": "America/Mexico_City", "MTY": "America/Monterrey", "QRO": "America/Mexico_City",
+    "SAP": "America/Tegucigalpa", "SJO": "America/Costa_Rica", "PTY": "America/Panama",
+    "HAV": "America/Havana", "NAS": "America/Nassau", "KIN": "America/Jamaica",
+    # Africa
+    "JNB": "Africa/Johannesburg", "CPT": "Africa/Johannesburg", "Cairo": "Africa/Cairo",
+    "LOS": "Africa/Lagos", "ACC": "Africa/Accra", "ADD": "Africa/Addis_Ababa",
+    "NBO": "Africa/Nairobi", "DUR": "Africa/Johannesburg", "ABJ": "Africa/Abidjan",
+}
+
+
+def _resolve_airport_timezone(airport_code: str) -> str | None:
+    """Return IANA timezone for an airport code, or None if unknown."""
+    return _AIRPORT_TZ.get(airport_code.upper())
+
 # The public companion never mounts or reads TREK plugin databases at runtime.
 # The bundled one-shot helper may be used manually to copy a provider key into
 # the dedicated secret file before this container starts.
@@ -151,7 +221,7 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.1.3"
+VERSION = "3.2.0"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -1940,20 +2010,26 @@ def _ical_escape(text: str) -> str:
     """Escape a string for use in an iCal property value."""
     return text.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
 
-def _ical_dt(value: str | None, is_date: bool = False) -> str:
-    """Format a ISO-8601 datetime string as iCal DTSTART/DTEND value.
+def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) -> tuple[str, str]:
+    """Format an ISO-8601 datetime string as an iCal DTSTART/DTEND value.
 
-    Times are emitted as naive (timezone-less) values so calendar clients
-    interpret them as the local time of each event's location.  The companion's
-    X-WR-TIMEZONE calendar property (ICAL_TIMEZONE env var) tells clients which
-    timezone to use as the calendar default.
+    Returns a (formatted_string, tz_name) tuple.  tz_name is empty when no
+    conversion was applied.  Callers use TZID= on the property line when
+    tz_name is non-empty.
     """
     if not value:
-        return ""
+        return "", ""
     value = value.replace("Z", "").rstrip("Z")
     if is_date:
-        return value[:10].replace("-", "")
-    return value[:15].replace("-", "").replace(":", "")
+        return value[:10].replace("-", ""), ""
+    if tz:
+        try:
+            naive = datetime.fromisoformat(value[:19])
+            local = naive.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(tz))
+            return local.strftime("%Y%m%dT%H%M%S"), tz
+        except Exception:
+            pass
+    return value[:15].replace("-", "").replace(":", ""), ""
 
 def _make_uid(kind: str, item_id: str, trip_id: str | None) -> str:
     safe_id = re.sub(r"[^A-Za-z0-9]", "-", f"{kind}-{item_id}")
@@ -2098,15 +2174,18 @@ def _build_ical_feed(trip_data: dict, session: dict) -> str:
                 if from_loc and to_loc:
                     summary += f" {from_loc} → {to_loc}"
 
-            start_dt = _ical_dt(item.get("reservation_time"))
-            end_dt = ""
-            # Try legs for flights
+            # Resolve per-event timezone from departure/arrival airport codes.
+            from_tz = _resolve_airport_timezone(from_loc) or ICAL_TIMEZONE
+            to_tz = _resolve_airport_timezone(to_loc) or ICAL_TIMEZONE
+            start_dt, start_tz = _ical_dt(item.get("reservation_time"), from_tz)
+            end_dt, end_tz = "", ""
+            # For flights, arrival time is in destination timezone; fallback uses departure tz.
             legs = item.get("legs") or []
             if legs and isinstance(legs, list):
                 last_leg = legs[-1] if isinstance(legs[-1], dict) else {}
-                end_dt = _ical_dt(last_leg.get("arr_time") or last_leg.get("arrival_time"))
+                end_dt, end_tz = _ical_dt(last_leg.get("arr_time") or last_leg.get("arrival_time"), to_tz)
             if not end_dt:
-                end_dt = _ical_dt(item.get("end_time") or item.get("arrival_time"))
+                end_dt, end_tz = _ical_dt(item.get("end_time") or item.get("arrival_time"), from_tz)
 
         else:  # accommodation
             place = item.get("place") or {}
@@ -2114,8 +2193,9 @@ def _build_ical_feed(trip_data: dict, session: dict) -> str:
             address = str(place.get("address") or item.get("address") or "")
             summary = f"🏨 {name}"
             arr_t, dep_t = _resolve_accommodation_times(item, raw_assignments, day_dates)
-            start_dt = _ical_dt(arr_t)
-            end_dt = _ical_dt(dep_t)
+            # Use ICAL_TIMEZONE until geocoding is available for accommodations.
+            start_dt, start_tz = _ical_dt(arr_t, ICAL_TIMEZONE)
+            end_dt, end_tz = _ical_dt(dep_t, ICAL_TIMEZONE)
 
         location = ""
         if item["_type"] == "reservation":
@@ -2129,9 +2209,11 @@ def _build_ical_feed(trip_data: dict, session: dict) -> str:
         lines.append("BEGIN:VEVENT")
         lines.append(f"UID:{uid}")
         if start_dt:
-            lines.append(f"DTSTART:{start_dt}")
+            tzid = f";TZID={start_tz}" if start_tz else ""
+            lines.append(f"DTSTART{tzid}:{start_dt}")
         if end_dt:
-            lines.append(f"DTEND:{end_dt}")
+            tzid = f";TZID={end_tz}" if end_tz else ""
+            lines.append(f"DTEND{tzid}:{end_dt}")
         lines.append(f"SUMMARY:{_ical_escape(summary)}")
         if location:
             lines.append(f"LOCATION:{_ical_escape(location)}")

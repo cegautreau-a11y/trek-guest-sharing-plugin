@@ -2,19 +2,24 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.2.0
+
+### Changed
+
+- **iCal per-event timezones**: Flight departure/arrival times are now converted to the respective airport's local timezone and emitted with `TZID=` in the iCal feed. Arrival times show the destination local time; departures show origin local time. Accommodations use `ICAL_TIMEZONE`. Set `ICAL_TIMEZONE` to your primary trip timezone (e.g. `America/Toronto`).
+- Added airport-code to IANA timezone mapping covering major airports in the Americas, Europe, Asia/Pacific, Africa, and the Middle East.
+
+### Security
+
+- Nothing yet.
+
+---
+
 ## 3.1.3
 
 ### Fixed
 
 - **iCal route regex**: Lowered minimum session ID length from 43 to 42 to match `secrets.token_urlsafe(32)` output and existing session IDs.
-
-### Changed
-
-- Nothing yet.
-
-### Fixed
-
-- Nothing yet.
 
 ### Security
 
