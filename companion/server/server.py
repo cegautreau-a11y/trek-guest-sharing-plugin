@@ -268,7 +268,7 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.3.4"
+VERSION = "3.3.5"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -2070,6 +2070,9 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
     # Ensure seconds are present so fromisoformat parses correctly.
     if len(value) == 16:  # YYYY-MM-DDTHH:MM
         value = value + ":00"
+    elif len(value) == 12:  # YYYYMMDDTHHMM (compact, no separators or seconds)
+        # Insert separators and pad seconds so fromisoformat can parse it.
+        value = f"{value[:8]}-{value[8:10]}:{value[10:12]}:00"
     if is_date:
         return value[:10].replace("-", ""), ""
     if tz:
@@ -2180,7 +2183,7 @@ def _build_ical_feed(trip_data: dict) -> str:
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//TREK Guest Portal//NONSGML v3.3.4//EN",
+        "PRODID:-//TREK Guest Portal//NONSGML v3.3.5//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
