@@ -1,4 +1,4 @@
-# TREK Guest Portal v2.1.1
+# TREK Guest Portal v3.0.1
 #
 # This is a standalone Docker Compose project. The companion joins TREK's
 # existing Docker network so TREK_HOST (normally "app") resolves through
@@ -36,7 +36,14 @@ services:
       # Set TREK_PUBLIC_ORIGIN when the guest site uses a dedicated hostname.
       # Leave it empty only for a same-origin /guest-portal/ deployment.
       - TREK_PUBLIC_ORIGIN=${TREK_PUBLIC_ORIGIN:-}
+      # Base URL path if the companion is mounted under a prefix (e.g. /guest-plugin/).
+      # Must start and end with a slash. Set GUEST_PLUGIN_PATH to the same value
+      # in .env so the companion can correctly generate iCal/webcal URLs.
+      - GUEST_PLUGIN_PATH=${GUEST_PLUGIN_PATH:-/guest-plugin/}
       - COOKIE_PATH=${COOKIE_PATH:-/}
+
+      # iCal/WebCal feed. ICAL_TIMEZONE sets X-WR-TIMEZONE (IANA name, e.g. America/New_York).
+      - ICAL_TIMEZONE=${ICAL_TIMEZONE:-UTC}
 
       # Guest sessions. A zero TTL means no server-side age expiry; sessions
       # remain memory-only and are invalidated by a container restart/redeploy.
