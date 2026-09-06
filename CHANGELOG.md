@@ -15,15 +15,27 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ---
 
+## 3.1.0
+
+### Added
+
+- Added `docker-compose-portainer.yml` for deploying the Guest Portal companion as a Portainer Stacks app. The stack includes the same environment variable template as the standard Compose file but is pre-configured for Portainer's bind-mount and variable-input model.
+
+### Changed
+
+- Version bumped to 3.1.0 across companion, plugin, and all docker-compose files.
+
+### Security
+
+- Nothing yet.
+
+---
+
 ## 3.1.3
 
 ### Fixed
 
 - **iCal route regex**: Lowered minimum session ID length from 43 to 42 to match `secrets.token_urlsafe(32)` output and existing session IDs.
-
-### Security
-
-- Nothing yet.
 
 ---
 
@@ -47,17 +59,29 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ## 3.0.0
 
+This release adds an iCal/WebCal calendar feed so guests can subscribe to a trip's itinerary in their preferred calendar app (Apple Calendar, Google Calendar, Outlook, etc.). The feed URL is shown as a **Subscribe** button in the Calendar tab and is also returned as a webcal:// URL via the `/api/ical-link` endpoint for automatic subscription handling.
+
+### Added
+
+- Added iCal/WebCal feed generation via `GET /ical/<session_id>`. The feed includes all flights, accommodations, cars/taxis, and other transport reservations as VEVENTs sorted chronologically.
+- Added RFC 5545 VCALENDAR structure with PRODID, VERSION, CALSCALE, METHOD, and X-WR-TIMEZONE properties.
+- Added per-item UID, SUMMARY, LOCATION, DESCRIPTION (confirmation code), DTSTART/DTEND, and SEQUENCE fields.
+- Added transport-specific formatting (departure/arrival airports, airline, flight number, seat, booking class) and accommodation-specific formatting (check-in/check-out times, hotel name, address).
+- Added `/api/ical-link` endpoint returning the canonical webcal:// and https:// subscription URLs for the current session.
+
+### Changed
+
+- Version bumped to 3.0.0 across companion, plugin, and all docker-compose files.
+
+### Security
+
+- iCal feed requires a valid guest session cookie, matching the protection used by all other browser-facing API endpoints.
+
 ---
 
 ## 2.1.1 - 2026-09-06
 
-### Added
-
-- Added a dedicated **Cars & Taxis** tab for car and taxi reservations.
-
-### Changed
-
-- Removed cars and taxis from the Flights tab while retaining them in the Plan timeline.
+This release finalizes the 2.1.x cycle with documentation cleanup and version synchronization.
 
 ### Validation
 
@@ -68,7 +92,7 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ## 2.1.0 - 2026-09-06
 
-This release consolidates the guest-portal navigation and TREK v4 accommodation fixes after the 2.0.x maintenance releases.
+This release consolidates guest-portal navigation and TREK v4 accommodation fixes after the 2.0.x maintenance releases.
 
 ### Added
 
@@ -77,7 +101,6 @@ This release consolidates the guest-portal navigation and TREK v4 accommodation 
 ### Changed
 
 - Removed cars and taxis from the Flights tab while retaining them in the Plan timeline.
-- Updated the release documentation and artifact names to the current 2.1.1 version.
 - Packaging now removes older versioned ZIPs and stale checksums before generating current release artifacts.
 
 ### Fixed
