@@ -2,6 +2,12 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.3.6
+
+### Fixed
+
+- **Per-event timezone detection for flights**: TREK flights carry no `place_id`/`assignment_id` and their `from`/`to` fields are null, so the GPS-based timezone lookup was never triggered. Now `_resolve_airport_timezone` extracts embedded 3-letter IATA codes directly from any string — including flight titles like `"LATAM AIRLINES BRASIL SDU → CGH → FLN"` and place names/addresses containing airport codes in parentheses. The last IATA code in a string is used (preferred destination airport for round-trip flights).
+
 ## 3.3.5
 
 ### Fixed

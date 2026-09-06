@@ -174,9 +174,40 @@ _AIRPORT_TZ: dict[str, str] = {
 }
 
 
+# Matches 3-letter IATA airport codes embedded in any string (e.g. "LA3307 SDU → CGH → FLN").
+_AIRPORT_CODE_RE = re.compile(r"\b([A-Z]{3})\b")
+
+
 def _resolve_airport_timezone(airport_code: str) -> str | None:
-    """Return IANA timezone for an airport code, or None if unknown."""
-    return _AIRPORT_TZ.get(airport_code.upper())
+    """Return IANA timezone for an airport code, or None if unknown.
+
+    Handles three input formats:
+      1. Plain IATA code  — e.g. ``"GRU"``
+      2. Flight title     — e.g. ``"LATAM AIRLINES BRASIL SDU → CGH → FLN"``
+      3. Full address     — e.g. ``"Toronto Pearson International Airport (YYZ)"``
+
+    The function extracts the first 3-letter uppercase token that exists in our
+    airport→timezone table, giving priority to codes that appear between arrows
+    (→) or near the end of the string (destination airports).
+    """
+    if not airport_code:
+        return None
+
+    code = airport_code.strip().upper()
+
+    # Fast path: plain IATA code lookup.
+    if code in _AIRPORT_TZ:
+        return _AIRPORT_TZ[code]
+
+    # Extract all 3-letter tokens and prefer the last one (destination airport)
+    # for round-trip flights where the title lists: DEP → CONNECTION1 → CONNECTION2 → ARR
+    tokens = _AIRPORT_CODE_RE.findall(airport_code)
+    for icao in reversed(tokens):
+        tz = _AIRPORT_TZ.get(icao)
+        if tz:
+            return tz
+
+    return None
 
 
 def _resolve_gps_timezone(trip_data: dict, location_name: str) -> str | None:
@@ -2183,7 +2214,7 @@ def _build_ical_feed(trip_data: dict) -> str:
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//TREK Guest Portal//NONSGML v3.3.5//EN",
+        "PRODID:-//TREK Guest Portal//NONSGML v3.3.6//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
@@ -2848,39 +2879,6 @@ class Handler(BaseHTTPRequestHandler):
                 path = "/" + path
         if path == "/health":
             return self._send_json(200, {"ok": True, "version": VERSION})
-        if path == "/debug/trip":
-            token = self.headers.get("X-Debug-Token", "").strip()
-            if not TOKEN_RE.fullmatch(token):
-                return self._send_json(400, {"error": "Invalid token"})
-            try:
-                trip_data = get_shared_trip(token, _upstream_host_header())
-            except LookupError:
-                return self._send_json(404, {"error": "Not found"})
-            except Exception as exc:
-                return self._send_json(502, {"error": str(exc)})
-            reservations = trip_data.get("reservations") or []
-            places = trip_data.get("places") or []
-            assignments = trip_data.get("assignments") or []
-            out = []
-            for r in reservations:
-                kind = str(r.get("type") or "")
-                if kind.lower() in {"flight", "car", "taxi", "train", "bus", "cruise", "ferry"}:
-                    out.append({
-                        "id": r.get("id"),
-                        "kind": kind,
-                        "location": r.get("location"),
-                        "place_id": r.get("place_id"),
-                        "assignment_id": r.get("assignment_id"),
-                        "title": r.get("title"),
-                        "time": r.get("reservation_time"),
-                        "end_time": r.get("reservation_end_time"),
-                    })
-            return self._send_json(200, {
-                "token": token,
-                "reservations": out,
-                "places": places,
-                "assignments": assignments,
-            })
         m = re.fullmatch(r"/ical/([A-Za-z0-9_-]{8,256})", path)
         if m:
             return self._ical_feed(m.group(1))
