@@ -2,6 +2,11 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.4.3
+
+### Changed
+- Log airport timezone database at startup
+
 ## 3.4.2
 
 ### Fixed
