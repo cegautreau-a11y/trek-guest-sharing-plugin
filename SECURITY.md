@@ -49,7 +49,7 @@ The provided Compose example uses:
 
 ## Known limitations
 
-- Anyone with an unrevoked owner-generated Guest Portal link can establish a read-only guest session because the underlying TREK/Journey share URLs are bearer capabilities. In v2.1.0 and later the fragment intentionally remains visible in the address bar/browser history so the page can be refreshed; treat screenshots, copied URLs, browser-history exports, and support tickets containing the full link as sensitive.
+- Anyone with an unrevoked owner-generated Guest Portal link can establish a read-only guest session because the underlying TREK/Journey share URLs are bearer capabilities. In v2.0.5 and later the fragment intentionally remains visible in the address bar/browser history so the page can be refreshed; treat screenshots, copied URLs, browser-history exports, and support tickets containing the full link as sensitive.
 - Guest sessions are in-memory and are lost on companion restart.
 - Third-party services receive network requests required to provide enabled features.
 - The project is custom integration code and should be revalidated after major TREK changes.

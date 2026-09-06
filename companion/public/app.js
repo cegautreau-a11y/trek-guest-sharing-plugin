@@ -493,6 +493,10 @@ function fatal(message) {
     return asArray(tripData?.reservations).filter(isTransportReservation);
   }
 
+  function carTaxiReservations() {
+    return transportReservations().filter(r => ['car', 'taxi'].includes(reservationType(r)));
+  }
+
   function linkedAccommodationReservationIds() {
     return new Set(asArray(tripData?.accommodations)
       .map(a => a?.reservation_id)
@@ -543,10 +547,12 @@ function fatal(message) {
   function tabDefs() {
     const p = tripData?.permissions || {};
     const transports = transportReservations();
+    const carsAndTaxis = carTaxiReservations();
     const reservations = nonTransportReservations();
     const accommodations = accommodationItems();
     const defs = [{ id: 'plan', label: 'Plan', show: true }];
-    defs.push({ id: 'flights', label: 'Flights', show: true, count: transports.length });
+    defs.push({ id: 'flights', label: 'Flights', show: true, count: transports.length - carsAndTaxis.length });
+    defs.push({ id: 'cars-taxis', label: 'Cars & Taxis', show: carsAndTaxis.length > 0, count: carsAndTaxis.length });
     defs.push({ id: 'reservations', label: 'Reservations', show: true, count: reservations.length + accommodations.length });
     defs.push({ id: 'photos', label: 'Photos', show: !!journeyData?.permissions?.share_gallery, count: gallery.length });
     return defs.filter(x => x.show);
@@ -632,6 +638,7 @@ function fatal(message) {
     if (!content) return;
     if (id === 'plan') renderPlan(content);
     else if (id === 'flights') renderFlights(content);
+    else if (id === 'cars-taxis') renderCarsAndTaxis(content);
     else if (id === 'reservations') renderReservations(content);
     else if (id === 'photos') renderPhotos(content);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2042,7 +2049,7 @@ function fatal(message) {
 
   function renderFlights(content) {
     clearFlightRefreshTimers();
-    const transports = transportReservations().slice().sort((a,b) => dateSortValue(a.reservation_time) - dateSortValue(b.reservation_time));
+    const transports = transportReservations().filter(r => !['car', 'taxi'].includes(reservationType(r))).slice().sort((a,b) => dateSortValue(a.reservation_time) - dateSortValue(b.reservation_time));
     const flights = transports.filter(r => reservationType(r) === 'flight');
     clientLog('flights.render', { transports: transports.length, flights: flights.length });
     flights.forEach(r => flightNextRefreshAt.set(String(r.id), 'checking'));
@@ -2050,6 +2057,14 @@ function fatal(message) {
       ${transports.length ? `<div class="transport-list">${transports.map(transportCard).join('')}</div>` : '<div class="card empty">No transport reservations are shared.</div>'}`;
     startFlightCountdown();
     flights.forEach(r => loadLiveFlight(r));
+  }
+
+  function renderCarsAndTaxis(content) {
+    clearFlightRefreshTimers();
+    const reservations = carTaxiReservations().slice().sort((a,b) => dateSortValue(a.reservation_time) - dateSortValue(b.reservation_time));
+    clientLog('cars_taxis.render', { reservations: reservations.length });
+    content.innerHTML = `<h2 class="section-title">Cars &amp; Taxis</h2>
+      ${reservations.length ? `<div class="transport-list">${reservations.map(transportCard).join('')}</div>` : '<div class="card empty">No cars or taxis are shared.</div>'}`;
   }
 
   async function loadLiveFlight(r) {

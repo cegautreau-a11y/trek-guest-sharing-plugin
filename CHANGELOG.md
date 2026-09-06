@@ -10,7 +10,7 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ### Changed
 
-- Nothing yet.
+- Split car and taxi reservations into a dedicated **Cars & Taxis** tab instead of listing them with Flights.
 
 ### Fixed
 
@@ -19,6 +19,22 @@ All notable project changes represented by TREK Guest Portal releases are docume
 ### Security
 
 - Nothing yet.
+
+---
+
+## 2.0.5 - 2026-09-06
+
+### Added
+
+- Added a dedicated **Cars & Taxis** tab for car and taxi reservations.
+
+### Changed
+
+- Removed cars and taxis from the Flights tab while retaining them in the Plan timeline.
+
+### Validation
+
+- Synchronized active package, runtime, documentation, and cache-busting version markers to 2.0.5.
 
 ---
 
