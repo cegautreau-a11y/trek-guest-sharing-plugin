@@ -1,0 +1,134 @@
+# TREK Guest Portal v3.0.3
+#
+# Standalone Docker Compose for Portainer / manual deployment.
+# All configuration is inline — no variable substitution or .env required.
+# Copy this into Portainer's Stack editor.
+#
+# Before deploying:
+#   - Create network "trek" (external: true) or set TREK_DOCKER_NETWORK in .env
+#   - Create ./secrets/immich_api_key and ./secrets/aerodatabox_api_key files
+#   - Adjust PUBLIC_ORIGIN, TREK_HOST, ports, and network name as needed
+services:
+  trek-guest-portal:
+    image: python:3.12-alpine
+    container_name: trek-guest-portal
+    restart: unless-stopped
+    read_only: true
+    user: "65532:65532"
+
+    # Bind to the interface reached by your reverse proxy.
+    ports:
+      - "127.0.0.1:8088:8080"
+
+    networks:
+      - trek
+
+    environment:
+      # Python/runtime settings.
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - LISTEN_PORT=8080
+      - PUBLIC_ROOT=/srv/public
+      - TREK_HOST=app
+      - TREK_PORT=3000
+      - UPSTREAM_TIMEOUT=20
+
+      # Browser origins and guest-session cookie scope.
+      - PUBLIC_ORIGIN=https://trax.wherearemypacketsgoing.com
+      - TREK_PUBLIC_ORIGIN=
+      - COOKIE_PATH=/
+
+      # Base URL path — must match your reverse-proxy mount prefix.
+      # e.g. /guest-plugin/ means the companion serves at example.com/guest-plugin/
+      - GUEST_PLUGIN_PATH=/guest-plugin/
+
+      # iCal/WebCal feed. ICAL_TIMEZONE sets X-WR-TIMEZONE (IANA name).
+      # Use the timezone of your trip locations, e.g. America/Los_Angeles.
+      - ICAL_TIMEZONE=UTC
+
+      # Guest sessions.
+      - SESSION_TTL_SECONDS=0
+      - SESSION_COOKIE_MAX_AGE_SECONDS=315360000
+      - SESSION_MAX=2048
+      - SESSION_CREATE_PER_MINUTE=120
+
+      # Logging.
+      - LOG_LEVEL=INFO
+      - LOG_FORMAT=kv
+      - FULL_LOGGING=true
+      - LOG_STATIC_REQUESTS=true
+      - LOG_SAFE_REQUEST_HEADERS=true
+      - CLIENT_EVENT_LOGGING=true
+      - CLIENT_EVENT_RATE_PER_MINUTE=240
+      - CLIENT_EVENT_MAX_BODY=8192
+      - LOG_HEARTBEAT_SECONDS=300
+
+      # Client-IP logging (enable only when reverse-proxy trust is configured).
+      - LOG_CLIENT_IP=false
+      - TRUST_PROXY_HEADERS=false
+      - CLIENT_IP_HEADER=X-Guest-Client-IP
+      - TRUSTED_PROXY_CIDRS=
+      - LOG_PROXY_DETAILS=true
+
+      # Flight scheduler.
+      - FLIGHT_API_WINDOW_HOURS=48
+      - FLIGHT_UPCOMING_POLL_SECONDS=600
+      - FLIGHT_ACTIVE_POLL_SECONDS=60
+      - FLIGHT_ERROR_POLL_SECONDS=300
+      - LIVE_FLIGHT_MAX_CACHE=256
+
+      # AeroDataBox/adsb.fi integration.
+      - AERODATABOX_API_KEY_FILE=/run/secrets/aerodatabox_api_key
+      - AERODATABOX_TIMEOUT=10
+      - AERODATABOX_MIN_INTERVAL=1.6
+      - AERODATABOX_429_RETRIES=2
+      - AERODATABOX_429_BACKOFF=2.5
+      - ADSB_TIMEOUT=8
+
+      # Guest Portal live-flight cache.
+      - GUEST_CACHE_DB=/cache/guest-portal.db
+      - GUEST_CACHE_MAX_ROWS=512
+
+      # Immich integration.
+      - IMMICH_URL=https://immich.wherearemypacketsgoing.com
+      - IMMICH_API_KEY_FILE=/run/secrets/immich_api_key
+      - IMMICH_VERIFY_TLS=true
+      - IMMICH_TIMEOUT=15
+      - IMMICH_DATE_CACHE_TTL=86400
+      - PHOTO_METADATA_PREFIX_BYTES=2097152
+      - PHOTO_DATE_CACHE_TTL=21600
+
+    volumes:
+      # Adjust source paths to match your host layout.
+      - /datastore/trax-guest/public:/srv/public:ro
+      - /datastore/trax-guest/server:/srv/server:ro
+      - /datastore/trax-guest/cache:/cache
+      - /datastore/trax-guest/secrets/immich_api_key:/run/secrets/immich_api_key:ro
+      - /datastore/trax-guest/secrets/aerodatabox_api_key:/run/secrets/aerodatabox_api_key:ro
+
+    command: ["python", "/srv/server/server.py"]
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3)); raise SystemExit(0 if d.get('ok') else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 256m
+
+networks:
+  trek:
+    external: true
+    name: "${TREK_DOCKER_NETWORK}"
