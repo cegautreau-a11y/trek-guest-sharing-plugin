@@ -127,6 +127,11 @@ _EMBEDDED_AIRPORT_TZ_DATA = {
     "FOR": "America/Fortaleza", "MAO": "America/Manaus", "BEL": "America/Belem",
     "NAT": "America/Recife", "MCZ": "America/Maceio", "JPQ": "America/Sao_Paulo",
     "NVT": "America/Sao_Paulo", "RBE": "America/Sao_Paulo",
+    "SDU": "America/Sao_Paulo", "SLZ": "America/Fortaleza", "THE": "America/Fortaleza",
+    "BPS": "America/Bahia", "PNB": "America/Bahia", "JPA": "America/Recife",
+    "MCZ": "America/Maceio", "CNF": "America/Sao_Paulo", "IGA": "America/Sao_Paulo",
+    "CGB": "America/Manaus", "STM": "America/Manaus", "RBR": "America/Acre",
+    "PVH": "America/Porto_Velho", "MAO": "America/Manaus",
     # Canada
     "YYZ": "America/Toronto", "YUL": "America/Montreal",
     "YVR": "America/Vancouver", "YWG": "America/Winnipeg", "YEG": "America/Edmonton",
@@ -226,7 +231,7 @@ def _load_airport_tz_database() -> dict[str, str]:
 
     db_path = os.path.join(os.path.dirname(__file__), "..", "..", "tools", "airport_tz.db")
 
-    # Start with embedded fallback
+    # Start with embedded fallback (used if DB operations fail)
     _AIRPORT_TZ = _EMBEDDED_AIRPORT_TZ_DATA.copy()
 
     try:
@@ -244,9 +249,25 @@ def _load_airport_tz_database() -> dict[str, str]:
             else:
                 logging.info("Airport timezone database is empty, building from embedded data")
                 _build_airport_tz_database(db_path)
+                # Reload from the newly built database
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT iata_code, timezone FROM airports")
+                rows = cursor.fetchall()
+                conn.close()
+                if rows:
+                    _AIRPORT_TZ = {code: tz for code, tz in rows}
         else:
             logging.info(f"Airport timezone database not found at {db_path}, building from embedded data")
             _build_airport_tz_database(db_path)
+            # Reload from the newly built database
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT iata_code, timezone FROM airports")
+            rows = cursor.fetchall()
+            conn.close()
+            if rows:
+                _AIRPORT_TZ = {code: tz for code, tz in rows}
     except Exception as e:
         logging.warning(f"Failed to load airport timezone database: {e}, using embedded fallback")
 
