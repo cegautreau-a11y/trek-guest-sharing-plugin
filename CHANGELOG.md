@@ -2,17 +2,15 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
-## 3.3.0
+## 3.3.1
 
-### Added
+### Fixed
 
-- **GPS timezone lookup**: `timezonefinder` (TimezoneFinderL) is now installed in the Alpine container image. Events and transports without an airport code look up the place's GPS coordinates from the trip's assignments/places database and derive the IANA timezone from lat/lng. This applies to cars, taxis, trains, buses, cruises, ferries, and any other transport type.
-- **Cars and taxis in iCal feed**: Removed the `CAR_TAXI_KINDS` skip that was silently dropping car and taxi reservations from the feed. All transport types with a date and time are now included.
-- **Timezone resolution chain**: For reservation start time, the timezone is resolved in order: airport code → GPS place lookup → `ICAL_TIMEZONE` fallback. For flight arrival time, destination airport → GPS place lookup → `ICAL_TIMEZONE` fallback.
+- **iCal DTSTART truncation**: `datetime.fromisoformat` handles ISO strings with or without seconds, so use the full value instead of the truncated `[:15]` slice. Previously, times without seconds (e.g. `06:30`) were producing malformed `DTSTART` values like `20260911T063` instead of `20260911T063000`, causing Google Calendar to reject the events.
 
 ---
 
-## 3.2.3
+## 3.3.0
 
 ### Added
 

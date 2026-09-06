@@ -1,4 +1,4 @@
-# TREK Guest Portal v3.3.0
+# TREK Guest Portal v3.3.1
 #
 # Standalone Docker Compose for Portainer / manual deployment.
 # All configuration is inline — no variable substitution or .env required.
