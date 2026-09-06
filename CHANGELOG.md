@@ -2,6 +2,11 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.4.5
+
+### Fixed
+- Fix airport timezone DB path to use writable location (/cache/) instead of read-only tools directory
+
 ## 3.4.3
 
 ### Changed
