@@ -2232,7 +2232,9 @@ def _build_ical_feed(trip_data: dict) -> str:
             to_loc = str(item.get("to") or item.get("to_location") or "")
             if kind_str == "flight":
                 flight = item.get("flight") or ""
-                summary = f"✈ {flight}" if flight else "✈ Flight"
+                title = item.get("title") or ""
+                # Prefer the descriptive title (may contain IATA codes like "LATAM AIRLINES BRASIL SDU → CGH → FLN").
+                summary = f"✈ {title}" if title else "✈ Flight"
                 if from_loc and to_loc:
                     summary += f" {from_loc} → {to_loc}"
             elif kind_str == "train":
@@ -2259,8 +2261,22 @@ def _build_ical_feed(trip_data: dict) -> str:
                     summary += f" {from_loc} → {to_loc}"
 
             # Resolve per-event timezone: airport code first, then GPS via place coordinates.
-            from_tz = _resolve_airport_timezone(from_loc) or _resolve_gps_timezone(trip_data, from_loc) or ICAL_TIMEZONE
-            to_tz = _resolve_airport_timezone(to_loc) or _resolve_gps_timezone(trip_data, to_loc) or ICAL_TIMEZONE
+            # For flights where from/to fields are empty, extract IATA codes from the title.
+            title = item.get("title") or ""
+            tz_source = from_loc or (title if kind_str == "flight" else "")
+            from_tz = (_resolve_airport_timezone(tz_source)
+                        or _resolve_gps_timezone(trip_data, tz_source)
+                        or ICAL_TIMEZONE)
+            # For flights, also try to extract destination from title for to_tz.
+            to_tz_source = to_loc
+            if kind_str == "flight" and not to_loc and title:
+                # Extract last IATA code from title as destination airport.
+                tokens = _AIRPORT_CODE_RE.findall(title)
+                if tokens:
+                    to_tz_source = tokens[-1]
+            to_tz = (_resolve_airport_timezone(to_tz_source)
+                       or _resolve_gps_timezone(trip_data, to_tz_source)
+                       or ICAL_TIMEZONE)
             start_dt, start_tz = _ical_dt(item.get("reservation_time"), from_tz)
             end_dt, end_tz = "", ""
             # For flights, arrival time is in destination timezone; fallback uses departure tz.
