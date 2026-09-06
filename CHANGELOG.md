@@ -2,6 +2,12 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.4.1
+
+### Changed
+
+- **Airport timezone database**: Airport-to-timezone mappings are now stored in a SQLite database (`tools/airport_tz.db`) built on first run from embedded data. The server creates the database automatically with logging at startup when the database doesn't exist. Falls back to embedded dict if database operations fail.
+
 ## 3.4.0
 
 ### Changed
