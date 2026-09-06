@@ -2859,17 +2859,28 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 return self._send_json(502, {"error": str(exc)})
             reservations = trip_data.get("reservations") or []
+            places = trip_data.get("places") or []
+            assignments = trip_data.get("assignments") or []
             out = []
             for r in reservations:
-                kind = str(r.get("type") or r.get("reservation_type") or r.get("category") or "")
+                kind = str(r.get("type") or "")
                 if kind.lower() in {"flight", "car", "taxi", "train", "bus", "cruise", "ferry"}:
                     out.append({
-                        "id": r.get("id") or r.get("reservation_id"),
+                        "id": r.get("id"),
                         "kind": kind,
-                        "all_keys": list(r.keys()),
-                        "time": r.get("reservation_time") or r.get("start_time"),
+                        "location": r.get("location"),
+                        "place_id": r.get("place_id"),
+                        "assignment_id": r.get("assignment_id"),
+                        "title": r.get("title"),
+                        "time": r.get("reservation_time"),
+                        "end_time": r.get("reservation_end_time"),
                     })
-            return self._send_json(200, {"token": token, "reservations": out})
+            return self._send_json(200, {
+                "token": token,
+                "reservations": out,
+                "places": places,
+                "assignments": assignments,
+            })
         m = re.fullmatch(r"/ical/([A-Za-z0-9_-]{8,256})", path)
         if m:
             return self._ical_feed(m.group(1))
