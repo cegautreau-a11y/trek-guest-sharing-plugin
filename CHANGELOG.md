@@ -2,6 +2,18 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.2.1
+
+### Added
+
+- **Runtime timezonefinder install**: If `timezonefinder` is not present in the environment when the companion server starts, it is installed automatically via pip before loading. This ensures the GPS timezone lookup works in any environment without requiring a pre-built image.
+
+### Security
+
+- Nothing yet.
+
+---
+
 ## 3.3.0
 
 ### Added
