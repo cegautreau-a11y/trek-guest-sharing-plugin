@@ -2715,7 +2715,7 @@ class Handler(BaseHTTPRequestHandler):
                 path = "/" + path
         if path == "/health":
             return self._send_json(200, {"ok": True, "version": VERSION})
-        m = re.fullmatch(r"/ical/([A-Za-z0-9_-]{43,})", path)
+        m = re.fullmatch(r"/ical/([A-Za-z0-9_-]{42,})", path)
         if m:
             return self._ical_feed(m.group(1))
         if path.startswith("/api/"):
