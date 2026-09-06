@@ -2,6 +2,19 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.3.3
+
+### Fixed
+
+- **iCal DTSTAMP required by RFC 5545**: Added `DTSTAMP` to every `VEVENT` block. Google Calendar ignores events without a `DTSTAMP`.
+- **Timezone validation**: `ZoneInfo("DST")` silently succeeds with an invalid timezone instead of raising an exception, causing the seconds-padding fallback to be skipped. Now validates the timezone with `utcoffset()` before use.
+
+## 3.3.2
+
+### Fixed
+
+- **iCal seconds padding**: Padded 16-char ISO datetime strings (HH:MM without seconds) to include `:00` seconds so `strftime("%Y%m%dT%H%M%S")` produces correct 6-digit time values.
+
 ## 3.3.1
 
 ### Fixed
