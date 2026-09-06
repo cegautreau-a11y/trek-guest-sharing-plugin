@@ -6,7 +6,7 @@
 services:
   trek-guest-portal:
     build:
-      context: .
+      context: /datastore/trax-guest
       dockerfile: Dockerfile
     image: trek-guest-portal:3.3.0
     container_name: trek-guest-portal
