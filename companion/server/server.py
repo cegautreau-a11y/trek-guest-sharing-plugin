@@ -3188,6 +3188,9 @@ def main():
     if not COOKIE_PATH.startswith("/") or not COOKIE_PATH.endswith("/"):
         raise SystemExit("COOKIE_PATH must start and end with /")
     init_guest_cache_db()
+    # Pre-load airport timezone database at startup to confirm it's available
+    airport_tz_count = len(_load_airport_tz_database())
+    log_event(logging.INFO, "startup.airport_timezone_db", airport_count=airport_tz_count, db_path=os.path.join(os.path.dirname(__file__), "..", "..", "tools", "airport_tz.db"))
     server = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     log_event(logging.INFO, "startup", version=VERSION, listen=f"{LISTEN_HOST}:{LISTEN_PORT}", public_root=PUBLIC_ROOT, log_level=LOG_LEVEL, public_origin=PUBLIC_ORIGIN, trek_public_origin=TREK_PUBLIC_ORIGIN, guest_plugin_path=GUEST_PLUGIN_PATH, cookie_path=COOKIE_PATH)
     invalid_proxy_entries = [part for part in re.split(r"[\s,]+", TRUSTED_PROXY_CIDRS_RAW) if part.strip() and not _parse_trusted_proxy_networks(part.strip())]
