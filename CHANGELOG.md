@@ -40,13 +40,27 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ## 2.1.0 - 2026-09-06
 
+This release consolidates the guest-portal navigation and TREK v4 accommodation fixes after the 2.0.x maintenance releases.
+
+### Added
+
+- Added a dedicated **Cars & Taxis** tab for car and taxi reservations.
+
 ### Changed
 
-- Promoted the current accommodation deduplication and date-correction work to the 2.1.0 release line.
+- Removed cars and taxis from the Flights tab while retaining them in the Plan timeline.
+- Updated the release documentation and artifact names to the current 2.1.1 version.
+- Packaging now removes older versioned ZIPs and stale checksums before generating current release artifacts.
+
+### Fixed
+
+- Deduplicated native accommodations and standalone TREK v4 hotel reservations when `reservation_id` linkage is absent but the records share a place, name, or address.
+- Restored correct accommodation Check-in and Check-out dates by combining time-only values with TREK day and place-assignment dates.
 
 ### Validation
 
-- Synchronized all package, runtime, documentation, and cache-busting version markers to 2.1.0.
+- Revalidated Python and JavaScript syntax, TREK/plugin version consistency, Compose configuration, documentation links, package contents, and release hygiene.
+- Rebuilt the plugin, companion, complete bundle, and checksum artifacts for 2.1.1.
 
 ---
 
