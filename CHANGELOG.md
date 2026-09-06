@@ -41,6 +41,7 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 - Completed sparse TREK v4 flight metadata from ordered endpoints so first, intermediate, and final itinerary legs render consistently.
 - Filled missing leg fields from adjacent endpoint and reservation metadata while preserving the six-leg safety limit.
+- Restored accommodation Check-in and Check-out dates for TREK v4 hotel records using shared day and place-assignment data when explicit reservation dates are absent.
 - Kept local tests, virtual environments, and generated release archives out of Git.
 
 ### Validation

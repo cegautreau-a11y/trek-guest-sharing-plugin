@@ -935,14 +935,39 @@ function fatal(message) {
     return parseMeta(a);
   }
 
+  function accommodationDayDate(dayId) {
+    if (dayId == null || dayId === '') return '';
+    const day = asArray(tripData?.days).find(item => String(item?.id) === String(dayId) || String(item?.day_number) === String(dayId));
+    return text(day?.date);
+  }
+
+  function accommodationNextDayDate(dayId) {
+    if (dayId == null || dayId === '') return '';
+    const days = asArray(tripData?.days);
+    const index = days.findIndex(item => String(item?.id) === String(dayId) || String(item?.day_number) === String(dayId));
+    if (index < 0 || !days[index + 1]) return '';
+    return text(days[index + 1]?.date);
+  }
+
+  function accommodationAssignmentDayId(a) {
+    const placeId = a?.place_id ?? a?.place?.id;
+    if (placeId == null || placeId === '') return '';
+    for (const [dayId, assignments] of Object.entries(tripData?.assignments || {})) {
+      if (asArray(assignments).some(item => String(item?.place?.id ?? item?.place_id) === String(placeId))) return dayId;
+    }
+    return '';
+  }
+
   function accommodationCheckIn(a) {
     const meta = accommodationMeta(a);
-    return text(a?.check_in, a?.checkin, a?.reservation_time, a?.start_time, a?.start_date, meta.check_in, meta.checkin);
+    const startDayId = accommodationStartDayId(a) || accommodationAssignmentDayId(a);
+    return text(a?.check_in, a?.checkin, a?.check_in_date, a?.checkin_date, a?.reservation_time, a?.start_time, a?.start_date, meta.check_in, meta.checkin, meta.check_in_date, meta.checkin_date, accommodationDayDate(startDayId));
   }
 
   function accommodationCheckOut(a) {
     const meta = accommodationMeta(a);
-    return text(a?.check_out, a?.checkout, a?.reservation_end_time, a?.end_time, a?.end_date, meta.check_out, meta.checkout);
+    const startDayId = accommodationStartDayId(a) || accommodationAssignmentDayId(a);
+    return text(a?.check_out, a?.checkout, a?.check_out_date, a?.checkout_date, a?.reservation_end_time, a?.end_time, a?.end_date, meta.check_out, meta.checkout, meta.check_out_date, meta.checkout_date, accommodationDayDate(accommodationEndDayId(a)), accommodationNextDayDate(startDayId));
   }
 
   function accommodationStartDayId(a) {
