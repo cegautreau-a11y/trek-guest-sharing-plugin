@@ -41,7 +41,7 @@ def fail(message: str) -> None:
 
 def text_files():
     """Yield repository text files while ignoring build/runtime by-products."""
-    ignored_parts = {'.git', 'dist', '__pycache__', '.pytest_cache'}
+    ignored_parts = {'.git', 'dist', '__pycache__', '.pytest_cache', '.venv'}
     ignored_suffixes = {'.zip', '.pyc', '.db', '.sqlite', '.sqlite3'}
     # Skip files whose names contain references to unsupported container-management
     # products to avoid false-positives in the forbidden-ui scan.
