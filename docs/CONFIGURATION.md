@@ -80,13 +80,20 @@ Both `PUBLIC_ORIGIN` and the effective TREK origin must be HTTPS origins without
 | `SESSION_COOKIE_MAX_AGE_SECONDS` | `315360000` | Browser cookie Max-Age when sessions have no server-side age expiry. |
 | `SESSION_MAX` | `2048` | Maximum in-memory guest sessions. |
 | `SESSION_CREATE_PER_MINUTE` | `120` | Global session-creation rate limit. |
+
+Sessions are intentionally memory-only. Restarting/redeploying the companion invalidates them. Guests re-establish access by opening the original owner-generated share URL.
+
+## Path prefix routing
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GUEST_PLUGIN_PATH` | `/guest-plugin/` | Base URL path prefix if the companion is mounted under a URL prefix. Must start and end with a slash. Set this to match the reverse-proxy mount point so iCal/WebCal URLs are generated correctly. |
+
 ## iCal feed
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ICAL_TIMEZONE` | `UTC` | IANA timezone name (e.g. `America/New_York`) used as fallback for accommodation events and when per-event airport timezone resolution fails. |
-| `GUEST_PLUGIN_PATH` | `/guest-plugin/` | Base URL path prefix if the companion is mounted under a URL prefix. Must start and end with a slash. Set this to match the reverse-proxy mount point so iCal/WebCal URLs are generated correctly. |
-Sessions are intentionally memory-only. Restarting/redeploying the companion invalidates them. Guests re-establish access by opening the original owner-generated share URL.
+| `ICAL_TIMEZONE` | `UTC` | IANA timezone name (e.g. `America/New_York`) used as fallback for accommodation events and when per-event airport timezone resolution fails. See [CALENDAR.md](CALENDAR.md) for full iCal documentation. |
 
 ## Logging and browser telemetry
 
