@@ -31,7 +31,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from timezonefinder import TimezoneFinderL
 
@@ -404,8 +404,8 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.5.0"
-PRODID = "-//TREK Guest Portal//NONSGML v3.3.12//EN"
+VERSION = "3.5.14"
+PRODID = "-//TREK Guest Portal//NONSGML v3.5.14//EN"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -2198,8 +2198,10 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
     """Format an ISO-8601 datetime string as an iCal DTSTART/DTEND value.
 
     Returns a (formatted_string, tz_name) tuple.  tz_name is empty when no
-    conversion was applied.  Uses UTC with Z suffix for maximum compatibility
-    with Google Calendar - the local timezone is preserved via VTIMEZONE blocks.
+    conversion was applied.  When tz is provided the local wall-clock time is
+    returned (no Z suffix) paired with a TZID= prefix — both must be present
+    for Apple Calendar to read the timezone correctly.  When no tz is given,
+    UTC with Z suffix is returned.
     """
     if not value:
         return "", ""
@@ -2218,12 +2220,12 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
             # Validate the timezone by checking it can produce a UTC offset.
             tz_obj.utcoffset(datetime.now())
             naive = datetime.fromisoformat(value)
-            # reservation_time from TREK is the local wall-clock time at the airport,
-            # NOT UTC.  Convert to UTC for iCal, Google Calendar will display it
-            # using the VTIMEZONE definition which specifies the local timezone.
+            # reservation_time from TREK is the local wall-clock time.
+            # Return it as-is for DTSTART;TZID=...: format — the VTIMEZONE
+            # block tells Apple Calendar which timezone to display it in.
             local = naive.replace(tzinfo=tz_obj)
-            utc = local.astimezone(ZoneInfo("UTC"))
-            return utc.strftime("%Y%m%dT%H%M%SZ"), ""
+            # Return local time (no Z), paired with TZID= for the header.
+            return local.strftime("%Y%m%dT%H%M%S"), tz
         except Exception:
             pass
     return value.replace("-", "").replace(":", ""), ""
@@ -2364,12 +2366,37 @@ def _resolve_accommodation_times(
     accommodation's place appears on and reconstruct full datetimes from the
     day date plus the time-only value.
     """
+    # If the accommodation has explicit day_id/end_day_id, use those directly
+    # with check_in_time/check_out_time from metadata.
+    start_day_id = item.get("start_day_id") or item.get("day_id")
+    end_day_id = item.get("end_day_id")
+    check_in_time = ""
+    check_out_time = ""
+    meta_str = item.get("metadata") or ""
+    if meta_str:
+        try:
+            parsed = json.loads(meta_str) if isinstance(meta_str, str) else meta_str
+            if isinstance(parsed, dict):
+                check_in_time = str(parsed.get("check_in_time") or "").strip()
+                check_out_time = str(parsed.get("check_out_time") or "").strip()
+        except (json.JSONDecodeError, TypeError):
+            pass
+    if start_day_id is not None and check_in_time:
+        start_date = day_dates.get(str(start_day_id), "")
+        if start_date:
+            start_dt = f"{start_date}T{check_in_time}:00"
+            if end_day_id is not None and check_out_time:
+                end_date = day_dates.get(str(end_day_id), "")
+                if end_date:
+                    return start_dt, f"{end_date}T{check_out_time}:00"
+            return start_dt, None
+
     place_id = str(item.get("place_id") or item.get("accommodation_id") or "")
     if not place_id:
         return item.get("arr_time"), item.get("dep_time")
 
-    start_dt: str | None = None
-    end_dt: str | None = None
+    start_dt = None
+    end_dt = None
 
     for day_id, date in day_dates.items():
         assigned_places = assignments.get(day_id) or []
@@ -2449,7 +2476,7 @@ def _build_ical_feed(trip_data: dict) -> str:
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//TREK Guest Portal//NONSGML v3.3.13//EN",
+        "PRODID:-//TREK Guest Portal//NONSGML v3.5.14//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
@@ -2461,14 +2488,118 @@ def _build_ical_feed(trip_data: dict) -> str:
     for item in items:
         kind_str = item["_kind"]
         item_id = str(item.get("id") or item.get("reservation_id") or "")
-        uid = _make_uid(kind_str, item_id, trip_id)
-        summary = ""
+        uid_base = _make_uid(kind_str, item_id, trip_id)
+        notes = str(item.get("notes") or "").strip()
 
         if item["_type"] == "reservation":
-            from_loc = str(item.get("from") or item.get("from_location") or "")
-            to_loc = str(item.get("to") or item.get("to_location") or "")
+            # Build airport-code -> timezone lookup from endpoints (used by
+            # both multi-leg expansion and single-leg flight summary).
+            airport_tz: dict[str, str] = {}
+            airport_codes: list[str] = []
+            raw_eps = item.get("endpoints") or []
+            if isinstance(raw_eps, list):
+                sorted_eps = sorted(
+                    [e for e in raw_eps if isinstance(e, dict)],
+                    key=lambda e: int(e.get("sequence") or 0),
+                )
+                for ep in sorted_eps:
+                    code = str(ep.get("code") or "").strip()
+                    tz = str(ep.get("timezone") or "").strip()
+                    if code:
+                        airport_codes.append(code)
+                    if code and tz:
+                        airport_tz[code] = tz
+
+            # Multi-leg flights: each leg becomes its own VEVENT.  We combine
+            # metadata.legs (which carry dep_time/arr_time per leg) with
+            # endpoints (which carry timezone per airport) to build per-leg
+            # VEVENTs with correct local times and timezones.
+            meta_legs: list = []
+            meta_str = item.get("metadata") or ""
+            if kind_str == "flight" and meta_str:
+                try:
+                    parsed_meta = json.loads(meta_str) if isinstance(meta_str, str) else meta_str
+                    if isinstance(parsed_meta, dict):
+                        raw_meta_legs = parsed_meta.get("legs")
+                        if isinstance(raw_meta_legs, list):
+                            meta_legs = [m for m in raw_meta_legs if isinstance(m, dict)]
+                except (json.JSONDecodeError, TypeError):
+                    meta_legs = []
+
+            if kind_str == "flight" and len(meta_legs) > 1:
+                for leg_idx, mleg in enumerate(meta_legs):
+                    leg_from = str(mleg.get("from") or "")
+                    leg_to = str(mleg.get("to") or "")
+                    if not leg_from or not leg_to:
+                        continue
+                    dep_day_id = mleg.get("dep_day_id")
+                    arr_day_id = mleg.get("arr_day_id")
+                    dep_date = day_dates.get(str(dep_day_id), "") if dep_day_id is not None else ""
+                    arr_date = day_dates.get(str(arr_day_id), "") if arr_day_id is not None else ""
+                    dep_time = str(mleg.get("dep_time") or "")
+                    arr_time = str(mleg.get("arr_time") or "")
+                    if not dep_date or not dep_time or not arr_date or not arr_time:
+                        continue
+                    dep_iso = f"{dep_date}T{dep_time}:00"
+                    arr_iso = f"{arr_date}T{arr_time}:00"
+                    from_tz = airport_tz.get(leg_from) or ICAL_TIMEZONE
+                    to_tz = airport_tz.get(leg_to) or ICAL_TIMEZONE
+                    if _tz_offset(from_tz) is None:
+                        from_tz = ICAL_TIMEZONE
+                    if _tz_offset(to_tz) is None:
+                        to_tz = ICAL_TIMEZONE
+                    # Per-leg summary: flight number (from leg metadata) + from/to codes.
+                    leg_flight = str(mleg.get("flight_number") or mleg.get("flightNumber") or "").strip()
+                    if leg_flight:
+                        summary = f"✈ {leg_flight} - {leg_from} → {leg_to}"
+                    else:
+                        summary = f"✈ {leg_from} → {leg_to}"
+                    location = leg_from
+                    start_dt, start_tz = _ical_dt(dep_iso, from_tz)
+                    end_dt, end_tz = _ical_dt(arr_iso, to_tz)
+                    if not start_dt or not end_dt:
+                        continue
+                    leg_uid = f"{uid_base}-leg{leg_idx + 1}"
+                    if start_tz:
+                        feed_tz_counts[start_tz] = feed_tz_counts.get(start_tz, 0) + 1
+                    if end_tz:
+                        feed_tz_counts[end_tz] = feed_tz_counts.get(end_tz, 0) + 1
+                    event_data.append((start_dt, start_tz, end_dt, end_tz, summary, location, notes, leg_uid))
+                continue  # Multi-leg flight expanded into individual events above.
+
+            # Single-leg or non-flight transport.
+            # For flights, from/to come from endpoints (sorted by sequence),
+            # then fall back to metadata departure_airport/arrival_airport,
+            # then to airport codes extracted from the title.
+            if kind_str == "flight" and len(airport_codes) >= 2:
+                from_loc = airport_codes[0]
+                to_loc = airport_codes[-1]
+            elif kind_str == "flight":
+                # Fallback: read airport codes from metadata.
+                meta_dep = ""
+                meta_arr = ""
+                if meta_str:
+                    try:
+                        parsed = json.loads(meta_str) if isinstance(meta_str, str) else meta_str
+                        if isinstance(parsed, dict):
+                            meta_dep = str(parsed.get("departure_airport") or "").strip()
+                            meta_arr = str(parsed.get("arrival_airport") or "").strip()
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                from_loc = meta_dep
+                to_loc = meta_arr
+                # Last resort: extract 3-letter airport codes from the title.
+                if not from_loc or not to_loc:
+                    title_for_codes = str(item.get("title") or "")
+                    code_tokens = re.findall(r"\b[A-Z]{3}\b", title_for_codes)
+                    if len(code_tokens) >= 2 and not from_loc:
+                        from_loc = code_tokens[0]
+                    if len(code_tokens) >= 2 and not to_loc:
+                        to_loc = code_tokens[-1]
+            else:
+                from_loc = str(item.get("from") or item.get("from_location") or "")
+                to_loc = str(item.get("to") or item.get("to_location") or "")
             if kind_str == "flight":
-                # Flight summary format: {flightid} - {from} -> {to}
                 flight_id = item.get("flight") or item.get("title") or ""
                 if from_loc and to_loc:
                     summary = f"✈ {flight_id} - {from_loc} → {to_loc}"
@@ -2497,8 +2628,8 @@ def _build_ical_feed(trip_data: dict) -> str:
                 if from_loc and to_loc:
                     summary += f" {from_loc} → {to_loc}"
 
-            # Resolve per-event timezone from metadata first (TREK provides proper IANA tz).
-            # Fall back to airport-code extraction from title, then GPS lookup, then ICAL_TIMEZONE.
+            # Resolve timezones: metadata first, then endpoint timezones,
+            # then airport-code/GPS lookup, then ICAL_TIMEZONE.
             from_tz = ICAL_TIMEZONE
             to_tz = ICAL_TIMEZONE
             title = item.get("title") or ""
@@ -2511,8 +2642,17 @@ def _build_ical_feed(trip_data: dict) -> str:
                         to_tz = str(meta.get("arrival_timezone") or "").strip() or ICAL_TIMEZONE
                 except (json.JSONDecodeError, TypeError):
                     pass
-            # Validate timezones; fall back to airport code extraction from title.
-            # Also re-resolve if we only have the default ICAL_TIMEZONE (not a real event tz).
+            # Fall back to endpoint timezones when metadata is missing them.
+            if kind_str == "flight":
+                if not from_tz or from_tz == ICAL_TIMEZONE or _tz_offset(from_tz) is None:
+                    from_tz = airport_tz.get(from_loc) or ICAL_TIMEZONE
+                if not to_tz or to_tz == ICAL_TIMEZONE or _tz_offset(to_tz) is None:
+                    to_tz = airport_tz.get(to_loc) or ICAL_TIMEZONE
+                # Last resort: look up airport code in the airport timezone DB.
+                if not from_tz or from_tz == ICAL_TIMEZONE or _tz_offset(from_tz) is None:
+                    from_tz = _resolve_airport_timezone(from_loc) or ICAL_TIMEZONE
+                if not to_tz or to_tz == ICAL_TIMEZONE or _tz_offset(to_tz) is None:
+                    to_tz = _resolve_airport_timezone(to_loc) or ICAL_TIMEZONE
             if from_tz and (_tz_offset(from_tz) is None or from_tz == ICAL_TIMEZONE):
                 from_tz = (_resolve_airport_timezone(title)
                            or _resolve_gps_timezone(trip_data, title)
@@ -2521,28 +2661,27 @@ def _build_ical_feed(trip_data: dict) -> str:
                 to_tz = (_resolve_airport_timezone(title)
                            or _resolve_gps_timezone(trip_data, title)
                            or ICAL_TIMEZONE)
-            # DEBUG: log timezone resolution
-            _logger.info(
-                "ical_tz_resolved kind=%s id=%s title=%r from_tz=%s to_tz=%s",
-                kind_str, item_id, title, from_tz, to_tz
-            )
-            start_dt, start_tz = _ical_dt(item.get("reservation_time"), from_tz)
+
+            # For flights, prefer endpoint local_date/local_time over
+            # reservation_time/reservation_end_time when available.
+            dep_iso = item.get("reservation_time") or ""
+            arr_iso = item.get("reservation_end_time") or ""
+            if kind_str == "flight" and len(sorted_eps) >= 2:
+                dep_ep = sorted_eps[0]
+                arr_ep = sorted_eps[-1]
+                dep_date = str(dep_ep.get("local_date") or "")
+                dep_time = str(dep_ep.get("local_time") or "")
+                arr_date = str(arr_ep.get("local_date") or "")
+                arr_time = str(arr_ep.get("local_time") or "")
+                if dep_date and dep_time:
+                    dep_iso = f"{dep_date}T{dep_time}:00"
+                if arr_date and arr_time:
+                    arr_iso = f"{arr_date}T{arr_time}:00"
+
+            start_dt, start_tz = _ical_dt(dep_iso, from_tz)
             end_dt, end_tz = "", ""
-            # INFO: log what time fields are available for iCal generation
-            _logger.info(
-                "ical_times kind=%s id=%s reservation_time=%s reservation_end_time=%s "
-                "arrival_time=%s legs_arr=%s",
-                kind_str, item_id,
-                item.get("reservation_time"),
-                item.get("reservation_end_time"),
-                item.get("arrival_time"),
-                (legs[-1].get("arr_time") if legs and isinstance(legs[-1], dict) else None) if (legs := item.get("legs") or []) else None
-            )
-            # Use reservation_end_time with the destination timezone (to_tz) since
-            # reservation_end_time from TREK is the arrival time in the destination timezone.
-            end_dt, end_tz = _ical_dt(item.get("reservation_end_time"), to_tz)
+            end_dt, end_tz = _ical_dt(arr_iso, to_tz)
             if not end_dt:
-                # Fallback to leg arrival time only if reservation_end_time not available
                 legs = item.get("legs") or []
                 if legs and isinstance(legs, list):
                     last_leg = legs[-1] if isinstance(legs[-1], dict) else {}
@@ -2550,39 +2689,65 @@ def _build_ical_feed(trip_data: dict) -> str:
             if not end_dt:
                 end_dt, end_tz = _ical_dt(
                     item.get("end_time") or item.get("arrival_time"),
-                    from_tz  # Use same tz as start for consistency
+                    from_tz
                 )
-            # Transport reservation location: departure point
-            location = str(item.get("from") or item.get("from_location") or "")
+            location = from_loc
 
         elif item["_type"] == "event":
             # General event (restaurant, tour, activity, etc.)
             title = item.get("title") or item.get("name") or "Event"
-            summary = f"📍 {title}"
-            from_loc = str(item.get("from") or item.get("location") or item.get("address") or "")
+            # Resolve address from multiple possible fields.
+            place = item.get("place") or {}
+            # If the event has a place_id, look up the place in trip_data["places"].
+            place_id = str(item.get("place_id") or "")
+            if place_id and not place:
+                for p in (trip_data.get("places") or []):
+                    if isinstance(p, dict) and str(p.get("id") or "") == place_id:
+                        place = p
+                        break
+            address = (
+                str(item.get("address") or "").strip()
+                or str(place.get("address") or "").strip()
+                or str(item.get("location") or "").strip()
+                or str(item.get("from") or "").strip()
+            )
+            # If location is just the venue name (not an address), keep it as
+            # the display name but don't use it as the address.
+            location_name = str(item.get("location") or "").strip()
+            from_loc = address
             to_loc = str(item.get("to") or "").strip()
-            if from_loc:
-                location = from_loc
-                if to_loc and to_loc != from_loc:
-                    summary += f" @ {from_loc} → {to_loc}"
-            else:
-                location = str(item.get("address") or item.get("place", {}).get("address") or "")
+            summary = f"📍 {title}"
+            if address and address != title:
+                summary += f" ({address})"
+            location = address or location_name
             start_dt, start_tz = _ical_dt(item.get("reservation_time") or item.get("start_time"), ICAL_TIMEZONE)
             end_dt, end_tz = _ical_dt(item.get("reservation_end_time") or item.get("end_time"), ICAL_TIMEZONE)
 
         else:  # accommodation
             place = item.get("place") or {}
-            name = str(place.get("name") or item.get("name") or "Accommodation")
-            address = str(place.get("address") or item.get("address") or "")
+            name = str(place.get("name") or item.get("name") or item.get("reservation_title") or item.get("place_name") or "Accommodation")
+            address = (
+                str(place.get("address") or "").strip()
+                or str(item.get("address") or "").strip()
+                or str(item.get("place_address") or "").strip()
+                or str(item.get("location") or "").strip()
+            )
             summary = f"🏨 {name}"
+            if address and address != name:
+                summary += f" ({address})"
             location = address
-            arr_t, dep_t = _resolve_accommodation_times(item, raw_assignments, day_dates)
-            # Use ICAL_TIMEZONE until geocoding is available for accommodations.
-            start_dt, start_tz = _ical_dt(arr_t, ICAL_TIMEZONE)
-            end_dt, end_tz = _ical_dt(dep_t, ICAL_TIMEZONE)
+            # Prefer explicit check_in/check_out fields from TREK v4.
+            check_in = str(item.get("check_in") or "")
+            check_out = str(item.get("check_out") or "")
+            if check_in and check_out:
+                start_dt, start_tz = _ical_dt(check_in, ICAL_TIMEZONE)
+                end_dt, end_tz = _ical_dt(check_out, ICAL_TIMEZONE)
+            else:
+                arr_t, dep_t = _resolve_accommodation_times(item, raw_assignments, day_dates)
+                start_dt, start_tz = _ical_dt(arr_t, ICAL_TIMEZONE)
+                end_dt, end_tz = _ical_dt(dep_t, ICAL_TIMEZONE)
 
         # Location was set inside each type handler above.
-
         notes = str(item.get("notes") or "").strip()
 
         # Skip events with no start or end time — Google Calendar requires both.
@@ -2595,7 +2760,81 @@ def _build_ical_feed(trip_data: dict) -> str:
         if end_tz:
             feed_tz_counts[end_tz] = feed_tz_counts.get(end_tz, 0) + 1
 
+        uid = uid_base
         event_data.append((start_dt, start_tz, end_dt, end_tz, summary, location, notes, uid))
+
+        # For accommodations, also emit a 1-hour check-in event using the
+        # check_in datetime from TREK (or check_in_time from metadata).
+        if item["_type"] == "accommodation":
+            check_in_dt = str(item.get("check_in") or "")
+            if not check_in_dt:
+                # Fallback: build from check_in_time + day_id date.
+                check_in_time = ""
+                meta_str = item.get("metadata") or ""
+                if meta_str:
+                    try:
+                        parsed = json.loads(meta_str) if isinstance(meta_str, str) else meta_str
+                        if isinstance(parsed, dict):
+                            check_in_time = str(parsed.get("check_in_time") or "").strip()
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                # Try multiple possible day_id field names.
+                start_day_id = (
+                    item.get("start_day_id")
+                    or item.get("day_id")
+                    or item.get("arrival_day_id")
+                )
+                start_date = day_dates.get(str(start_day_id), "") if start_day_id is not None else ""
+                if check_in_time and start_date:
+                    check_in_dt = f"{start_date}T{check_in_time}:00"
+            if check_in_dt:
+                ci_start, ci_tz = _ical_dt(check_in_dt, start_tz or ICAL_TIMEZONE)
+                if ci_start:
+                    try:
+                        ci_naive = datetime.strptime(ci_start, "%Y%m%dT%H%M%S")
+                        ci_end_naive = ci_naive + timedelta(hours=1)
+                        ci_end = ci_end_naive.strftime("%Y%m%dT%H%M%S")
+                    except ValueError:
+                        ci_end = ""
+                    if ci_end:
+                        checkin_summary = f"🏨 Check-in: {name}"
+                        checkin_uid = f"{uid_base}-checkin"
+                        if ci_tz:
+                            feed_tz_counts[ci_tz] = feed_tz_counts.get(ci_tz, 0) + 1
+                        event_data.append((ci_start, ci_tz, ci_end, ci_tz, checkin_summary, location, notes, checkin_uid))
+
+            # Also emit a 1-hour check-out event ending at the check-out time.
+            check_out_dt = str(item.get("check_out") or "")
+            if not check_out_dt:
+                # Fallback: build from check_out_time + end_day_id date.
+                check_out_time = ""
+                meta_str = item.get("metadata") or ""
+                if meta_str:
+                    try:
+                        parsed = json.loads(meta_str) if isinstance(meta_str, str) else meta_str
+                        if isinstance(parsed, dict):
+                            check_out_time = str(parsed.get("check_out_time") or "").strip()
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                end_day_id = item.get("end_day_id")
+                end_date = day_dates.get(str(end_day_id), "") if end_day_id is not None else ""
+                if check_out_time and end_date:
+                    check_out_dt = f"{end_date}T{check_out_time}:00"
+            if check_out_dt:
+                co_end, co_tz = _ical_dt(check_out_dt, end_tz or ICAL_TIMEZONE)
+                if co_end:
+                    try:
+                        co_naive = datetime.strptime(co_end, "%Y%m%dT%H%M%S")
+                        co_start_naive = co_naive - timedelta(hours=1)
+                        co_start = co_start_naive.strftime("%Y%m%dT%H%M%S")
+                    except ValueError:
+                        co_start = ""
+                    if co_start:
+                        checkout_summary = f"🏨 Check-out: {name}"
+                        checkout_uid = f"{uid_base}-checkout"
+                        if co_tz:
+                            feed_tz_counts[co_tz] = feed_tz_counts.get(co_tz, 0) + 1
+                        event_data.append((co_start, co_tz, co_end, co_tz, checkout_summary, location, notes, checkout_uid))
 
     # Determine the primary timezone as the most common timezone across all events.
     # Fall back to ICAL_TIMEZONE, then UTC.

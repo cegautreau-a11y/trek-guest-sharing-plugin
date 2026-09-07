@@ -2,26 +2,91 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
-## 3.5.1
-
-### Changed
-- **Documentation refresh**: Comprehensive docs review and update for v3.5.0 consistency
+## 3.5.14
 
 ### Fixed
-- **FLIGHTS.md polling intervals**: Corrected browser-side polling intervals to match actual code (upcoming flights checked every 10 minutes, not 30; active flights at 1 minute)
-- **TROUBLESHOOTING.md "Next auto refresh" section**: Replaced legacy v1.1.0 text with current refresh behavior
+- **iCal accommodation times**: Accommodations with `day_id`/`end_day_id` and `metadata.check_in_time`/`check_out_time` now resolve full datetimes directly, without requiring a `place_id` linked via day assignments
+
+## 3.5.13
+
+### Fixed
+- **iCal accommodation times**: Accommodations with `day_id`/`end_day_id` and `metadata.check_in_time`/`check_out_time` now resolve full datetimes directly, without requiring a `place_id` linked via day assignments
+
+## 3.5.12
+
+### Fixed
+- **iCal event place_id resolution**: Events with a `place_id` but no inline address now resolve their address by looking up the place in `trip_data["places"]`
+
+## 3.5.11
+
+### Changed
+- **Documentation refresh**: Comprehensive docs review and update for v3.5.11 consistency
+
+## 3.5.10
 
 ### Added
+- **iCal hotel check-out events**: Each accommodation now emits a separate 1-hour check-out VEVENT ending at the `check_out` datetime from TREK (e.g., a 12:00 checkout produces an 11:00–12:00 event), or falling back to `metadata.check_out_time` combined with the end day date
+
+## 3.5.9
+
+### Added
+- **iCal hotel check-in events**: Each accommodation now emits a separate 1-hour check-in VEVENT using the `check_in` datetime from TREK, or falling back to `metadata.check_in_time` combined with the start day date
+
+### Fixed
+- **iCal accommodation addresses**: Accommodations now include address information in the summary and LOCATION field, resolved from `place.address`, `address`, `place_address`, or `location` fields
+
+## 3.5.8
+
+### Fixed
+- **iCal accommodation addresses**: Accommodations now include address information in the summary and LOCATION field, resolved from `place.address`, `address`, `place_address`, or `location` fields
+
+## 3.5.7
+
+### Fixed
+- **iCal event addresses**: Events now include address information in the summary and LOCATION field, resolved from `address`, `place.address`, `location`, or `from` fields
+- **iCal flight from/to codes**: Single-leg flights now read airport codes from `metadata.departure_airport`/`arrival_airport`, and as a last resort extract 3-letter codes from the title
+
+## 3.5.6
+
+### Fixed
+- **iCal flight from/to codes**: Single-leg flights now read airport codes from `metadata.departure_airport`/`arrival_airport` as a fallback when `endpoints` are not present in the shared trip payload
+
+## 3.5.5
+
+### Fixed
+- **iCal per-leg flight numbers**: Each leg in a multi-leg flight now uses its own `flight_number` from `metadata.legs` instead of the reservation-level flight number
+- **iCal single-leg flight timezones**: Single-leg flights now fall back to endpoint timezones when metadata timezones are missing, and use endpoint `local_date`/`local_time` for accurate per-airport local times
+
+## 3.5.4
+
+### Fixed
+- **iCal multi-leg flights**: Multi-leg flights now expand into individual VEVENTs per leg, each with correct departure/arrival times and timezones derived from `metadata.legs` and `endpoints`
+
+## 3.5.3
+
+### Changed
+- **Documentation refresh**: Comprehensive docs review and update for v3.5.3 consistency
+
+## 3.5.2
+
+### Fixed
+- **iCal timezone fix**: Fixed end times not showing correctly in Apple Calendar by returning local wall-clock time with TZID instead of converting to UTC with Z suffix
+
+## 3.5.1
+
+### Added
+- **iCal events support**: Non-transport reservations (restaurants, tours, activities) now appear in iCal feeds with location data. Events without start and end times are skipped.
+- **iCal flight summary format**: Flights now show as `{flightid} - {from} → {to}` (e.g., `LA3210 - SDU → GIG`)
+- **iCal location data**: All iCal events now include LOCATION (departure point for transport, venue address for events, hotel address for accommodations)
 - **docs/CALENDAR.md**: Dedicated calendar documentation covering iCal/WebCal feed routes, timezone handling, supported clients (Apple Calendar only), per-trip enablement, configuration, and troubleshooting
 - **CONFIGURATION.md**: Added `ICAL_TIMEZONE`, `GUEST_PLUGIN_PATH`, `mapbox3d`, `mapboxHighQuality`, and `LOG_PROXY_DETAILS` environment variables
 - **PREREQUISITES.md**: Added Mapbox configuration options (`MAPBOX_STYLE`, `MAPBOX_3D`, `MAPBOX_HIGH_QUALITY`)
 - **PHOTOS.md**: Documented `/api/photos/` proxy endpoint and Journey photos support
 
-### iCal Feed Enhancements
-- **Events support**: Non-transport reservations (restaurants, tours, activities) now appear in iCal feeds with location data. Events without start and end times are skipped.
-- **Flight summary format**: Flights now show as `{flightid} - {from} → {to}` (e.g., `LA3210 - SDU → GIG`)
-- **Location data**: All iCal events now include LOCATION (departure point for transport, venue address for events, hotel address for accommodations)
-- **Sensitive data excluded**: Confirmation codes are no longer included in iCal feed notes
+### Fixed
+- **FLIGHTS.md polling intervals**: Corrected browser-side polling intervals to match actual code (upcoming flights checked every 10 minutes, not 30; active flights at 1 minute)
+- **TROUBLESHOOTING.md "Next auto refresh" section**: Replaced legacy v1.1.0 text with current refresh behavior
+- **iCal sensitive data excluded**: Confirmation codes are no longer included in iCal feed notes
 
 ### Removed
 - **ARCHITECTURE.md**: Calendar section moved to dedicated CALENDAR.md; Google/Outlook calendar references removed

@@ -1,4 +1,4 @@
-# Upgrading to 3.5.0
+# Upgrading to 3.5.14
 
 This procedure upgrades an existing TREK Guest Portal installation to the current Docker Compose layout.
 
