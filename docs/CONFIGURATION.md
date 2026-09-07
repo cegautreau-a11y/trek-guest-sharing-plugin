@@ -80,7 +80,12 @@ Both `PUBLIC_ORIGIN` and the effective TREK origin must be HTTPS origins without
 | `SESSION_COOKIE_MAX_AGE_SECONDS` | `315360000` | Browser cookie Max-Age when sessions have no server-side age expiry. |
 | `SESSION_MAX` | `2048` | Maximum in-memory guest sessions. |
 | `SESSION_CREATE_PER_MINUTE` | `120` | Global session-creation rate limit. |
+## iCal feed
 
+| Variable | Default | Purpose |
+|---|---|---|
+| `ICAL_TIMEZONE` | `UTC` | IANA timezone name (e.g. `America/New_York`) used as fallback for accommodation events and when per-event airport timezone resolution fails. |
+| `GUEST_PLUGIN_PATH` | `/guest-plugin/` | Base URL path prefix if the companion is mounted under a URL prefix. Must start and end with a slash. Set this to match the reverse-proxy mount point so iCal/WebCal URLs are generated correctly. |
 Sessions are intentionally memory-only. Restarting/redeploying the companion invalidates them. Guests re-establish access by opening the original owner-generated share URL.
 
 ## Logging and browser telemetry
@@ -95,8 +100,7 @@ Sessions are intentionally memory-only. Restarting/redeploying the companion inv
 | `CLIENT_EVENT_LOGGING` | `true` | Enables session-protected browser telemetry. |
 | `CLIENT_EVENT_RATE_PER_MINUTE` | `240` | Per-session browser telemetry event limit. |
 | `CLIENT_EVENT_MAX_BODY` | `8192` | Maximum accepted telemetry JSON body size in bytes. |
-| `LOG_HEARTBEAT_SECONDS` | `300` | Runtime heartbeat interval. |
-
+| `LOG_HEARTBEAT_SECONDS` | `300` | Runtime heartbeat interval. || `LOG_PROXY_DETAILS` | `true` | Include proxy peer/source information when client-IP logging is enabled. |
 Browser telemetry is sanitized server-side. Fields whose names imply tokens, secrets, passwords, authorization, cookies, sessions, confirmations, email addresses, or phone numbers are rejected rather than logged.
 
 ## Client IP / reverse-proxy trust
@@ -180,11 +184,18 @@ Then configure:
 ```javascript
 window.GUEST_PORTAL_CONFIG = {
   mapboxAccessToken: 'pk.YOUR_PUBLIC_TOKEN',
-  mapboxStyle: 'mapbox://styles/mapbox/standard',
-  mapbox3d: true,
-  mapboxHighQuality: false
+  mapboxStyle: 'mapbox://styles/mapbox/standard',  // or custom style URL
+  mapbox3d: true,        // enable 3D terrain and 45° pitch
+  mapboxHighQuality: false  // true = globe projection + antialiasing
 };
 ```
+
+| Property | Default | Purpose |
+|---|---|---|
+| `mapboxAccessToken` | (required) | Public Mapbox `pk...` token. |
+| `mapboxStyle` | `mapbox://styles/mapbox/standard` | Mapbox style URL or built-in style name. |
+| `mapbox3d` | `true` | Enable 3D terrain and 45° pitch on selected stops. |
+| `mapboxHighQuality` | `false` | Use globe projection and antialiasing for higher visual quality. |
 
 `config.js` is public browser configuration and must not contain server secrets.
 

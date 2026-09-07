@@ -12,3 +12,9 @@
 - [Upgrading](UPGRADING.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [Logging](LOGGING.md) — request correlation, scheduler decisions, cache/provider events, and log security.
+
+## Start here
+
+[PREREQUISITES](PREREQUISITES.md) → [INSTALL](INSTALL.md) → [CONFIGURATION](CONFIGURATION.md) → [GUEST-ORIGIN](GUEST-ORIGIN.md) → [REVERSE-PROXY](REVERSE-PROXY.md) → validate → [TROUBLESHOOTING](TROUBLESHOOTING.md).
+
+[ARCHITECTURE](ARCHITECTURE.md) provides a system-level overview. [FLIGHTS](FLIGHTS.md) and [CARSTAXIS](CARSTAXIS.md) cover the transport tabs. [PHOTOS](PHOTOS.md) covers Immich enrichment. [LOGGING](LOGGING.md) covers observability.

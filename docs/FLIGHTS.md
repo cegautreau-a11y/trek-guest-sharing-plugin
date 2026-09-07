@@ -17,10 +17,10 @@ Guest Portal deliberately separates **browser/local checks** from **external pro
 Default scheduling:
 
 - more than 48 hours before departure: browser checks every 10 minutes; AeroDataBox is not queried;
-- 12–48 hours: provider data may refresh about every 30 minutes;
-- 3–12 hours: provider data may refresh about every 5 minutes;
-- less than 3 hours: provider data may refresh about every minute;
-- active/boarding/en-route: provider data may refresh about every minute;
+- 12–48 hours: browser checks every 10 minutes; provider data may refresh up to every 30 minutes;
+- 3–12 hours: browser checks every 10 minutes; provider data may refresh up to every 5 minutes;
+- less than 3 hours: browser checks every minute; provider data may refresh up to every minute;
+- active/boarding/en-route: browser checks every minute; provider data may refresh up to every minute;
 - completed flights: automatic live refreshing stops.
 
 The server's cache/provider TTL is authoritative. Multiple guests watching the same flight do not independently consume provider quota each time their browsers poll.

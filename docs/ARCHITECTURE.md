@@ -90,6 +90,28 @@ GET /api/photos/<photo-id>/original
 
 Sessions are memory-only. A page refresh can reconstruct a session from the retained fragment. Native TREK/Journey share revocation remains authoritative, and the complete owner-generated Guest Portal URL must be protected as a bearer capability.
 
+## Calendar tab
+
+The Calendar tab provides an iCal/WebCal feed URL for subscribing to the trip itinerary in calendar applications. The feed is generated server-side and validated against TREK on every request.
+
+```
+GET /calendar/<trip_token>.ics
+GET /api/ical-link
+```
+
+The iCal feed:
+- follows RFC 5545 with VTIMEZONE components for proper timezone support;
+- converts flight departure/arrival times to the respective airport's local timezone;
+- uses `ICAL_TIMEZONE` as fallback for accommodations and when per-event timezone resolution fails;
+- supports Apple Calendar (macOS/iOS) and any CalDAV client that respects VTIMEZONE;
+- requires a valid guest session.
+
+The companion also serves a WebCal URL for direct calendar subscription:
+```
+GET /ical/<trip_token>
+```
+This redirects to the `webcal://` variant of the iCal feed URL.
+
 ## Origin separation
 
 Recommended browser origins:

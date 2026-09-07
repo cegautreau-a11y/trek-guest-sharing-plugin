@@ -134,10 +134,12 @@ Also check the provider's current plan quota/rate limit. Multiple unrelated appl
 
 ## Next auto refresh looks wrong
 
-In v1.1.0 the Flights header separates the browser check from the provider schedule:
+The Flights header separates the browser check from the provider schedule:
 
-- more than 48 hours out: **Next auto refresh** should be about 10 minutes, while the detail line says when the live-provider window opens;
-- inside 48 hours: the browser checks every minute, but AeroDataBox is only called when the 30m / 5m / 1m provider TTL actually expires;
+- more than 48 hours out: browser checks every 10 minutes; **Next auto refresh** shows 10 minutes; AeroDataBox is suppressed;
+- 12–48 hours: browser checks every 10 minutes; AeroDataBox may refresh up to every 30 minutes;
+- 3–12 hours: browser checks every 10 minutes; AeroDataBox may refresh up to every 5 minutes;
+- less than 3 hours: browser checks every minute; AeroDataBox may refresh up to every minute;
 - completed flights stop continuous refresh.
 
 Check the correlated scheduler event:

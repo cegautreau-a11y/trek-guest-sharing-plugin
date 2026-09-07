@@ -11,13 +11,14 @@ TREK Guest Portal turns TREK's native public trip and Journey shares into a rich
 
 ## Guest experience
 
-Guest Portal intentionally exposes four core sections plus a conditional Cars & Taxis section when those reservations are shared:
+Guest Portal intentionally exposes five sections when the underlying TREK shares are enabled:
 
 - **Plan** — a unified day-by-day timeline combining planned stops, flights/transport, bookings, and accommodation **Check-in / Stay / Check-out** events. Place-linked bookings remain attached to their stop, flights are positioned between matching departure/arrival airport places when possible, and Mapbox retains inline selected-stop focus with a fixed 1 km framing radius.
 - **Flights** — TREK transport cards plus optional AeroDataBox/adsb.fi live data, quota-aware provider scheduling, in-memory and persistent caching, and separate browser/provider countdowns.
 - **Cars & Taxis** — car and taxi reservations separated from Flights while remaining positioned in the Plan timeline.
 - **Reservations** — accommodations (including standalone `hotel` bookings) and other non-transport bookings in separate sections. Linked TREK Hotel partner records are deduplicated.
 - **Photos** — Journey gallery media grouped chronologically; optional Immich integration resolves original asset capture dates server-side.
+- **Calendar** — iCal/WebCal subscription URL for Apple Calendar and other CalDAV clients that support VTIMEZONE; times are converted to per-event airport timezones with UTC fallback.
 
 Flights and Reservations remain visible even when empty. Journal, Packing, Budget, Collab, and external "Open in Maps" links are intentionally omitted from the guest view.
 
@@ -45,7 +46,8 @@ TREK Guest Portal companion container
        │
        ├── validates native TREK/Journey public shares
        ├── exchanges share capabilities for an HttpOnly guest session
-       ├── renders Plan / Flights / Reservations / Photos
+       ├── renders Plan / Flights / Cars & Taxis / Reservations / Photos / Calendar
+       ├── serves iCal/WebCal feed with per-event timezone support
        ├── talks to Mapbox from the browser
        ├── queries Immich server-side for capture dates (optional)
        └── queries AeroDataBox/adsb.fi server-side for live flights (optional)
