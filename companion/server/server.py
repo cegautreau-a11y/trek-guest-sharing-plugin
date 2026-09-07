@@ -2464,10 +2464,9 @@ def _build_ical_feed(trip_data: dict) -> str:
                 item.get("arrival_time"),
                 (legs[-1].get("arr_time") if legs and isinstance(legs[-1], dict) else None) if (legs := item.get("legs") or []) else None
             )
-            # Use reservation_end_time with the SAME timezone as start to ensure
-            # end time matches exactly what was entered in TREK (no timezone conversion).
-            # This makes Google Calendar show the same start/end times as TREK.
-            end_dt, end_tz = _ical_dt(item.get("reservation_end_time"), from_tz)
+            # Use reservation_end_time with the destination timezone (to_tz) since
+            # reservation_end_time from TREK is the arrival time in the destination timezone.
+            end_dt, end_tz = _ical_dt(item.get("reservation_end_time"), to_tz)
             if not end_dt:
                 # Fallback to leg arrival time only if reservation_end_time not available
                 legs = item.get("legs") or []
