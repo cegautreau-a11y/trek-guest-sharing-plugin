@@ -2588,7 +2588,7 @@ def _build_ical_feed(trip_data: dict) -> str:
     if feed_tz_counts:
         primary_tz = max(feed_tz_counts, key=lambda tz: feed_tz_counts[tz])
 
-    # Note: X-WR-TIMEZONE can cause Google Calendar to ignore event-level TZID.
+    # Note: X-WR-TIMEZONE can cause calendar apps to ignore event-level TZID.
     # Each event has its own TZID= in DTSTART/DTEND, so X-WR-TIMEZONE is not needed.
 
     # Add VTIMEZONE blocks for each timezone used in the feed.

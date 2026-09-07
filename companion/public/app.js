@@ -472,13 +472,6 @@ function fatal(message) {
           ${icalLink ? `<button class="btn-copy" id="copy-ical" type="button">Copy</button>` : ''}
         </div>
 
-        <h4>Google Calendar</h4>
-        <ol>
-          <li>Open <a href="https://calendar.google.com" target="_blank" rel="noopener">Google Calendar</a> on the web.</li>
-          <li>Next to "Other calendars" in the left panel, click <strong>+ Add other calendars</strong> → <strong>From URL</strong>.</li>
-          <li>Paste the WebCal link above and click <strong>Add calendar</strong>.</li>
-        </ol>
-
         <h4>Apple Calendar (macOS / iOS)</h4>
         <ol>
           <li>Open Apple Calendar.</li>
@@ -486,18 +479,8 @@ function fatal(message) {
           <li>Paste the WebCal link and click <strong>Subscribe</strong>.</li>
         </ol>
 
-        <h4>Outlook (Web / Desktop)</h4>
-        <ol>
-          <li>Open Outlook.</li>
-          <li>Click <strong>Add calendar</strong> → <strong>Subscribe from web</strong>.</li>
-          <li>Paste the WebCal link and configure the calendar name and colour as you like.</li>
-        </ol>
-
-        <h4>Other CalDAV Clients</h4>
-        <p>Your calendar app should accept a WebCal (<code>webcal://</code>) URL or the HTTPS subscription link shown above. Paste it where the app asks for the feed URL.</p>
-
         <div class="info-box">
-          <strong>Auto-updates:</strong> The calendar refreshes automatically as the trip owner updates the TREK itinerary. Depending on your calendar app, updates may appear within a few minutes.
+          <strong>Auto-updates:</strong> The calendar refreshes automatically as the trip owner updates the TREK itinerary. Updates typically appear within a few minutes.
         </div>
       </div>
     `;

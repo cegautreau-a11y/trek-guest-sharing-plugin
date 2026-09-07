@@ -5,7 +5,7 @@ All notable project changes represented by TREK Guest Portal releases are docume
 ## 3.4.15
 
 ### Fixed
-- Fix iCal Google Calendar timezone issue by removing X-WR-TIMEZONE header (Google now uses event-level TZID)
+- Fix iCal feed for Apple Calendar by converting times to UTC with Z suffix for proper timezone handling
 
 ## 3.4.14
 
@@ -60,13 +60,13 @@ All notable project changes represented by TREK Guest Portal releases are docume
 
 ### Changed
 
-- **iCal URL is now stable across redeployments**: The iCal feed URL is now derived from the trip's share token instead of an ephemeral in-memory session ID. Previously, every container restart/redeploy invalidated all active session IDs, causing the iCal URL to change and breaking Google Calendar subscriptions. The feed still validates against TREK on every request so security is unchanged.
+- **iCal URL is now stable across redeployments**: The iCal feed URL is now derived from the trip's share token instead of an ephemeral in-memory session ID. Previously, every container restart/redeploy invalidated all active session IDs, causing the iCal URL to change and breaking calendar subscriptions. The feed still validates against TREK on every request so security is unchanged.
 
 ## 3.3.3
 
 ### Fixed
 
-- **iCal DTSTAMP required by RFC 5545**: Added `DTSTAMP` to every `VEVENT` block. Google Calendar ignores events without a `DTSTAMP`.
+- **iCal DTSTAMP required by RFC 5545**: Added `DTSTAMP` to every `VEVENT` block.
 - **Timezone validation**: `ZoneInfo("DST")` silently succeeds with an invalid timezone instead of raising an exception, causing the seconds-padding fallback to be skipped. Now validates the timezone with `utcoffset()` before use.
 
 ## 3.3.2
