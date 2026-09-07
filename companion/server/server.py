@@ -2449,8 +2449,8 @@ def _build_ical_feed(trip_data: dict) -> str:
                            or ICAL_TIMEZONE)
             start_dt, start_tz = _ical_dt(item.get("reservation_time"), from_tz)
             end_dt, end_tz = "", ""
-            # DEBUG: log what time fields are available for iCal generation
-            _logger.debug(
+            # INFO: log what time fields are available for iCal generation
+            _logger.info(
                 "ical_times kind=%s id=%s reservation_time=%s reservation_end_time=%s "
                 "arrival_time=%s legs_arr=%s",
                 kind_str, item_id,
