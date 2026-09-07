@@ -2,7 +2,7 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
-## 3.4.10
+## 3.4.11
 
 ### Fixed
 - Fix iCal end time to match TREK start/end times (use reservation_end_time with same timezone as departure)
