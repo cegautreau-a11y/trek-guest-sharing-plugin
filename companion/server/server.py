@@ -2422,9 +2422,11 @@ def _build_ical_feed(trip_data: dict) -> str:
 
     for r in reservations:
         k = kind(r)
-        if k not in TRANSPORT_KINDS:
-            continue
-        items.append({**r, "_kind": k, "_type": "reservation"})
+        if k in TRANSPORT_KINDS:
+            items.append({**r, "_kind": k, "_type": "reservation"})
+        else:
+            # Non-transport reservation — treated as a general event (restaurant, tour, etc.)
+            items.append({**r, "_kind": "event", "_type": "event"})
 
     for a in accommodations:
         items.append({**a, "_kind": "accommodation", "_type": "accommodation"})
@@ -2466,12 +2468,12 @@ def _build_ical_feed(trip_data: dict) -> str:
             from_loc = str(item.get("from") or item.get("from_location") or "")
             to_loc = str(item.get("to") or item.get("to_location") or "")
             if kind_str == "flight":
-                flight = item.get("flight") or ""
-                title = item.get("title") or ""
-                # Prefer the descriptive title (may contain IATA codes like "LATAM AIRLINES BRASIL SDU → CGH → FLN").
-                summary = f"✈ {title}" if title else "✈ Flight"
+                # Flight summary format: {flightid} - {from} -> {to}
+                flight_id = item.get("flight") or item.get("title") or ""
                 if from_loc and to_loc:
-                    summary += f" {from_loc} → {to_loc}"
+                    summary = f"✈ {flight_id} - {from_loc} → {to_loc}"
+                else:
+                    summary = f"✈ {flight_id}"
             elif kind_str == "train":
                 summary = "🚆 Train"
                 if from_loc and to_loc:
@@ -2550,25 +2552,38 @@ def _build_ical_feed(trip_data: dict) -> str:
                     item.get("end_time") or item.get("arrival_time"),
                     from_tz  # Use same tz as start for consistency
                 )
+            # Transport reservation location: departure point
+            location = str(item.get("from") or item.get("from_location") or "")
+
+        elif item["_type"] == "event":
+            # General event (restaurant, tour, activity, etc.)
+            title = item.get("title") or item.get("name") or "Event"
+            summary = f"📍 {title}"
+            from_loc = str(item.get("from") or item.get("location") or item.get("address") or "")
+            to_loc = str(item.get("to") or "").strip()
+            if from_loc:
+                location = from_loc
+                if to_loc and to_loc != from_loc:
+                    summary += f" @ {from_loc} → {to_loc}"
+            else:
+                location = str(item.get("address") or item.get("place", {}).get("address") or "")
+            start_dt, start_tz = _ical_dt(item.get("reservation_time") or item.get("start_time"), ICAL_TIMEZONE)
+            end_dt, end_tz = _ical_dt(item.get("reservation_end_time") or item.get("end_time"), ICAL_TIMEZONE)
 
         else:  # accommodation
             place = item.get("place") or {}
             name = str(place.get("name") or item.get("name") or "Accommodation")
             address = str(place.get("address") or item.get("address") or "")
             summary = f"🏨 {name}"
+            location = address
             arr_t, dep_t = _resolve_accommodation_times(item, raw_assignments, day_dates)
             # Use ICAL_TIMEZONE until geocoding is available for accommodations.
             start_dt, start_tz = _ical_dt(arr_t, ICAL_TIMEZONE)
             end_dt, end_tz = _ical_dt(dep_t, ICAL_TIMEZONE)
 
-        location = ""
-        if item["_type"] == "reservation":
-            location = str(item.get("from") or item.get("from_location") or "")
-        else:
-            place = item.get("place") or {}
-            location = str(place.get("address") or item.get("address") or "")
+        # Location was set inside each type handler above.
 
-        notes = str(item.get("notes") or item.get("confirmation_code") or "").strip()
+        notes = str(item.get("notes") or "").strip()
 
         # Skip events with no start or end time — Google Calendar requires both.
         if not start_dt or not end_dt:

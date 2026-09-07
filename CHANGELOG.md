@@ -17,6 +17,12 @@ All notable project changes represented by TREK Guest Portal releases are docume
 - **PREREQUISITES.md**: Added Mapbox configuration options (`MAPBOX_STYLE`, `MAPBOX_3D`, `MAPBOX_HIGH_QUALITY`)
 - **PHOTOS.md**: Documented `/api/photos/` proxy endpoint and Journey photos support
 
+### iCal Feed Enhancements
+- **Events support**: Non-transport reservations (restaurants, tours, activities) now appear in iCal feeds with location data. Events without start and end times are skipped.
+- **Flight summary format**: Flights now show as `{flightid} - {from} → {to}` (e.g., `LA3210 - SDU → GIG`)
+- **Location data**: All iCal events now include LOCATION (departure point for transport, venue address for events, hotel address for accommodations)
+- **Sensitive data excluded**: Confirmation codes are no longer included in iCal feed notes
+
 ### Removed
 - **ARCHITECTURE.md**: Calendar section moved to dedicated CALENDAR.md; Google/Outlook calendar references removed
 
