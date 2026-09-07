@@ -2,6 +2,26 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.5.18
+
+### Fixed
+- **iCal hotel-type reservations**: Reservations with type "hotel" (stored in the `reservations` array, not `accommodations`) now also generate check-in and check-out events. The accommodation name resolution now falls back to `title` for hotel-type reservations, and the check-out day falls back to `day_id` when `end_day_id` is not available
+
+## 3.5.17
+
+### Changed
+- **iCal accommodation events**: The full hotel stay event is no longer emitted. Only the separate 1-hour check-in and check-out events are included in the iCal feed
+
+## 3.5.16
+
+### Fixed
+- **iCal check-in/check-out event overlap**: Check-in and check-out events no longer overlap with the stay event. The check-in event now ends at the check-in time (1 hour before the stay starts), and the check-out event starts at the check-out time (1 hour after the stay ends), so Apple Calendar displays all three as separate entries
+
+## 3.5.15
+
+### Fixed
+- **iCal accommodation check-in/check-out**: Accommodations now correctly handle time-only `check_in`/`check_out` values (e.g., `"14:00"`) by combining them with `start_day_id`/`end_day_id` dates to produce full datetimes for both the stay event and the separate check-in/check-out VEVENTs
+
 ## 3.5.14
 
 ### Fixed

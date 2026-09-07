@@ -404,8 +404,8 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.5.14"
-PRODID = "-//TREK Guest Portal//NONSGML v3.5.14//EN"
+VERSION = "3.5.18"
+PRODID = "-//TREK Guest Portal//NONSGML v3.5.18//EN"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -2451,6 +2451,10 @@ def _build_ical_feed(trip_data: dict) -> str:
         k = kind(r)
         if k in TRANSPORT_KINDS:
             items.append({**r, "_kind": k, "_type": "reservation"})
+        elif k == "hotel":
+            # Hotel-type reservation — treat as accommodation so check-in/
+            # check-out events are emitted.
+            items.append({**r, "_kind": "accommodation", "_type": "accommodation"})
         else:
             # Non-transport reservation — treated as a general event (restaurant, tour, etc.)
             items.append({**r, "_kind": "event", "_type": "event"})
@@ -2476,7 +2480,7 @@ def _build_ical_feed(trip_data: dict) -> str:
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//TREK Guest Portal//NONSGML v3.5.14//EN",
+        "PRODID:-//TREK Guest Portal//NONSGML v3.5.18//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
@@ -2725,7 +2729,14 @@ def _build_ical_feed(trip_data: dict) -> str:
 
         else:  # accommodation
             place = item.get("place") or {}
-            name = str(place.get("name") or item.get("name") or item.get("reservation_title") or item.get("place_name") or "Accommodation")
+            name = str(
+                place.get("name")
+                or item.get("name")
+                or item.get("title")
+                or item.get("reservation_title")
+                or item.get("place_name")
+                or "Accommodation"
+            )
             address = (
                 str(place.get("address") or "").strip()
                 or str(item.get("address") or "").strip()
@@ -2736,23 +2747,23 @@ def _build_ical_feed(trip_data: dict) -> str:
             if address and address != name:
                 summary += f" ({address})"
             location = address
-            # Prefer explicit check_in/check_out fields from TREK v4.
-            check_in = str(item.get("check_in") or "")
-            check_out = str(item.get("check_out") or "")
-            if check_in and check_out:
-                start_dt, start_tz = _ical_dt(check_in, ICAL_TIMEZONE)
-                end_dt, end_tz = _ical_dt(check_out, ICAL_TIMEZONE)
-            else:
-                arr_t, dep_t = _resolve_accommodation_times(item, raw_assignments, day_dates)
-                start_dt, start_tz = _ical_dt(arr_t, ICAL_TIMEZONE)
-                end_dt, end_tz = _ical_dt(dep_t, ICAL_TIMEZONE)
+            # Skip the full stay event — only emit separate check-in and
+            # check-out events for accommodations.
+            start_dt, start_tz = "", ""
+            end_dt, end_tz = "", ""
+            # Mark this as an accommodation so the skip check below allows
+            # the check-in/check-out events through.
+            _skip_stay = True
 
         # Location was set inside each type handler above.
         notes = str(item.get("notes") or "").strip()
 
         # Skip events with no start or end time — Google Calendar requires both.
+        # Accommodations are allowed through even without a stay event so the
+        # separate check-in/check-out events can still be emitted.
         if not start_dt or not end_dt:
-            continue
+            if item["_type"] != "accommodation":
+                continue
 
         # Collect timezones for VTIMEZONE generation and primary timezone detection.
         if start_tz:
@@ -2761,15 +2772,29 @@ def _build_ical_feed(trip_data: dict) -> str:
             feed_tz_counts[end_tz] = feed_tz_counts.get(end_tz, 0) + 1
 
         uid = uid_base
-        event_data.append((start_dt, start_tz, end_dt, end_tz, summary, location, notes, uid))
+        if start_dt and end_dt:
+            event_data.append((start_dt, start_tz, end_dt, end_tz, summary, location, notes, uid))
 
         # For accommodations, also emit a 1-hour check-in event using the
-        # check_in datetime from TREK (or check_in_time from metadata).
+        # check_in time from TREK (time-only, combined with start_day_id date).
         if item["_type"] == "accommodation":
-            check_in_dt = str(item.get("check_in") or "")
+            check_in_dt = ""
+            check_in_time = str(item.get("check_in") or "").strip()
+            if check_in_time and ":" in check_in_time:
+                # Time-only value — combine with start_day_id date.
+                start_day_id = (
+                    item.get("start_day_id")
+                    or item.get("day_id")
+                    or item.get("arrival_day_id")
+                )
+                start_date = day_dates.get(str(start_day_id), "") if start_day_id is not None else ""
+                if start_date:
+                    check_in_dt = f"{start_date}T{check_in_time}:00"
+            elif check_in_time:
+                # Full datetime value.
+                check_in_dt = check_in_time
             if not check_in_dt:
-                # Fallback: build from check_in_time + day_id date.
-                check_in_time = ""
+                # Fallback: build from check_in_time in metadata.
                 meta_str = item.get("metadata") or ""
                 if meta_str:
                     try:
@@ -2778,7 +2803,6 @@ def _build_ical_feed(trip_data: dict) -> str:
                             check_in_time = str(parsed.get("check_in_time") or "").strip()
                     except (json.JSONDecodeError, TypeError):
                         pass
-                # Try multiple possible day_id field names.
                 start_day_id = (
                     item.get("start_day_id")
                     or item.get("day_id")
@@ -2788,15 +2812,15 @@ def _build_ical_feed(trip_data: dict) -> str:
                 if check_in_time and start_date:
                     check_in_dt = f"{start_date}T{check_in_time}:00"
             if check_in_dt:
-                ci_start, ci_tz = _ical_dt(check_in_dt, start_tz or ICAL_TIMEZONE)
-                if ci_start:
+                ci_end, ci_tz = _ical_dt(check_in_dt, start_tz or ICAL_TIMEZONE)
+                if ci_end:
                     try:
-                        ci_naive = datetime.strptime(ci_start, "%Y%m%dT%H%M%S")
-                        ci_end_naive = ci_naive + timedelta(hours=1)
-                        ci_end = ci_end_naive.strftime("%Y%m%dT%H%M%S")
+                        ci_end_naive = datetime.strptime(ci_end, "%Y%m%dT%H%M%S")
+                        ci_start_naive = ci_end_naive - timedelta(hours=1)
+                        ci_start = ci_start_naive.strftime("%Y%m%dT%H%M%S")
                     except ValueError:
-                        ci_end = ""
-                    if ci_end:
+                        ci_start = ""
+                    if ci_start:
                         checkin_summary = f"🏨 Check-in: {name}"
                         checkin_uid = f"{uid_base}-checkin"
                         if ci_tz:
@@ -2804,10 +2828,19 @@ def _build_ical_feed(trip_data: dict) -> str:
                         event_data.append((ci_start, ci_tz, ci_end, ci_tz, checkin_summary, location, notes, checkin_uid))
 
             # Also emit a 1-hour check-out event ending at the check-out time.
-            check_out_dt = str(item.get("check_out") or "")
+            check_out_dt = ""
+            check_out_time = str(item.get("check_out") or "").strip()
+            if check_out_time and ":" in check_out_time:
+                # Time-only value — combine with end_day_id date.
+                end_day_id = item.get("end_day_id")
+                end_date = day_dates.get(str(end_day_id), "") if end_day_id is not None else ""
+                if end_date:
+                    check_out_dt = f"{end_date}T{check_out_time}:00"
+            elif check_out_time:
+                # Full datetime value.
+                check_out_dt = check_out_time
             if not check_out_dt:
-                # Fallback: build from check_out_time + end_day_id date.
-                check_out_time = ""
+                # Fallback: build from check_out_time in metadata.
                 meta_str = item.get("metadata") or ""
                 if meta_str:
                     try:
@@ -2816,20 +2849,26 @@ def _build_ical_feed(trip_data: dict) -> str:
                             check_out_time = str(parsed.get("check_out_time") or "").strip()
                     except (json.JSONDecodeError, TypeError):
                         pass
-                end_day_id = item.get("end_day_id")
+                # Try end_day_id first, then fall back to day_id (hotel-type
+                # reservations use a single day_id for both check-in and
+                # check-out).
+                end_day_id = (
+                    item.get("end_day_id")
+                    or item.get("day_id")
+                )
                 end_date = day_dates.get(str(end_day_id), "") if end_day_id is not None else ""
                 if check_out_time and end_date:
                     check_out_dt = f"{end_date}T{check_out_time}:00"
             if check_out_dt:
-                co_end, co_tz = _ical_dt(check_out_dt, end_tz or ICAL_TIMEZONE)
-                if co_end:
+                co_start, co_tz = _ical_dt(check_out_dt, end_tz or ICAL_TIMEZONE)
+                if co_start:
                     try:
-                        co_naive = datetime.strptime(co_end, "%Y%m%dT%H%M%S")
-                        co_start_naive = co_naive - timedelta(hours=1)
-                        co_start = co_start_naive.strftime("%Y%m%dT%H%M%S")
+                        co_start_naive = datetime.strptime(co_start, "%Y%m%dT%H%M%S")
+                        co_end_naive = co_start_naive + timedelta(hours=1)
+                        co_end = co_end_naive.strftime("%Y%m%dT%H%M%S")
                     except ValueError:
-                        co_start = ""
-                    if co_start:
+                        co_end = ""
+                    if co_end:
                         checkout_summary = f"🏨 Check-out: {name}"
                         checkout_uid = f"{uid_base}-checkout"
                         if co_tz:
