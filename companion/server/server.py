@@ -2219,26 +2219,96 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
             tz_obj.utcoffset(datetime.now())
             naive = datetime.fromisoformat(value)
             # reservation_time from TREK is the local wall-clock time at the airport,
-            # NOT UTC.  Convert to UTC and use Z suffix to avoid Google Calendar
-            # misinterpreting times via VTIMEZONE (which may not handle DST correctly).
+            # NOT UTC.  Return the local time with the IANA tz name so that
+            # Google Calendar (with VTIMEZONE blocks present) can display it correctly.
             local = naive.replace(tzinfo=tz_obj)
-            utc = local.astimezone(ZoneInfo("UTC"))
-            return utc.strftime("%Y%m%dT%H%M%SZ"), ""
+            return local.strftime("%Y%m%dT%H%M%S"), tz
         except Exception:
             pass
     return value.replace("-", "").replace(":", ""), ""
 
 
 def _build_vtimezone(tz_name: str) -> str:
-    """Generate a minimal RFC 5545 VTIMEZONE component for the given IANA timezone.
+    """Generate an RFC 5545 VTIMEZONE component for the given IANA timezone.
 
-    Produces a single STANDARD sub-component with a fixed UTC offset and a real
-    historical DTSTART (1967-10-29) to satisfy parsers that require it.
-    This is sufficient for Google Calendar to correctly interpret DTSTART/DTEND
-    times that use TZID= on the property line.
+    Produces both STANDARD and DAYLIGHT sub-components with proper UTC offsets
+    and DST transition dates for the current year.  This ensures Google Calendar
+    correctly interprets times for timezones with DST (e.g. America/Sao_Paulo).
     """
     try:
         tz_obj = ZoneInfo(tz_name)
+        now = datetime.now(tz_obj)
+        year = now.year
+
+        # Get transitions for this year using the _tzinfo hook
+        try:
+            trans, trans_idx = tz_obj._tzinfos[0]._transitions
+        except (AttributeError, KeyError, IndexError):
+            # Fallback: single offset
+            return _build_vtimezone_single(tz_name, tz_obj)
+
+        lines = [
+            "BEGIN:VTIMEZONE",
+            f"TZID:{tz_name}",
+        ]
+
+        seen_offsets = set()
+        for i, t in enumerate(trans):
+            if t.year != year:
+                continue
+            tt = t.timetuple()
+            # Get the offset after this transition
+            if i + 1 < len(trans_idx):
+                offset_after = trans_idx[i + 1]
+            else:
+                offset_after = trans_idx[-1] if trans_idx else 0
+            tz_info = tz_obj._tzinfos[offset_after]
+            offset = tz_info._utcoffset
+            total_seconds = int(offset.total_seconds())
+            sign = "+" if total_seconds >= 0 else "-"
+            total_seconds = abs(total_seconds)
+            hh = total_seconds // 3600
+            mm = (total_seconds % 3600) // 60
+            offset_str = f"{sign}{hh:02d}{mm:02d}"
+            if offset_str in seen_offsets:
+                continue
+            seen_offsets.add(offset_str)
+            is_dst = i > 0 and offset_after != trans_idx[0]
+            component = "DAYLIGHT" if is_dst else "STANDARD"
+            dtstart = tt.strftime("%Y%m%dT%H%M%S")
+            # Get the offset before this transition
+            offset_before = trans_idx[max(0, i - 1)] if i > 0 else trans_idx[0]
+            tz_before = tz_obj._tzinfos[offset_before]
+            offset_from = tz_before._utcoffset
+            total_from = int(offset_from.total_seconds())
+            sign_from = "+" if total_from >= 0 else "-"
+            total_from = abs(total_from)
+            hh_from = total_from // 3600
+            mm_from = (total_from % 3600) // 60
+            offset_from_str = f"{sign_from}{hh_from:02d}{mm_from:02d}"
+            tzname = f"{tz_name}_{component}" if is_dst else tz_name
+            lines.extend([
+                f"BEGIN:{component}",
+                f"DTSTART:{dtstart}",
+                f"TZOFFSETFROM:{offset_from_str}",
+                f"TZOFFSETTO:{offset_str}",
+                f"TZNAME:{tzname}",
+                f"END:{component}",
+            ])
+
+        lines.append("END:VTIMEZONE")
+        return "\r\n".join(lines)
+    except Exception as e:
+        # Fallback to single offset
+        try:
+            return _build_vtimezone_single(tz_name, ZoneInfo(tz_name))
+        except Exception:
+            return ""
+
+
+def _build_vtimezone_single(tz_name: str, tz_obj: ZoneInfo) -> str:
+    """Fallback: generate a single-offset VTIMEZONE when DST info unavailable."""
+    try:
         now = datetime.now(tz_obj)
         offset = tz_obj.utcoffset(now)
         if offset is None:
