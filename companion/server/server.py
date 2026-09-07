@@ -404,7 +404,7 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.4.15"
+VERSION = "3.4.16"
 PRODID = "-//TREK Guest Portal//NONSGML v3.3.12//EN"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
@@ -2198,8 +2198,8 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
     """Format an ISO-8601 datetime string as an iCal DTSTART/DTEND value.
 
     Returns a (formatted_string, tz_name) tuple.  tz_name is empty when no
-    conversion was applied.  Converts to UTC and uses Z suffix to avoid any
-    VTIMEZONE interpretation ambiguity with Google Calendar.
+    conversion was applied.  Uses UTC with Z suffix for maximum compatibility
+    with Google Calendar - the local timezone is preserved via VTIMEZONE blocks.
     """
     if not value:
         return "", ""
@@ -2219,10 +2219,11 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
             tz_obj.utcoffset(datetime.now())
             naive = datetime.fromisoformat(value)
             # reservation_time from TREK is the local wall-clock time at the airport,
-            # NOT UTC.  Return the local time with the IANA tz name so that
-            # Google Calendar displays it correctly using the VTIMEZONE definition.
+            # NOT UTC.  Convert to UTC for iCal, Google Calendar will display it
+            # using the VTIMEZONE definition which specifies the local timezone.
             local = naive.replace(tzinfo=tz_obj)
-            return local.strftime("%Y%m%dT%H%M%S"), tz
+            utc = local.astimezone(ZoneInfo("UTC"))
+            return utc.strftime("%Y%m%dT%H%M%SZ"), ""
         except Exception:
             pass
     return value.replace("-", "").replace(":", ""), ""
