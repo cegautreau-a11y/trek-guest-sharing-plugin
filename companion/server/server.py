@@ -2447,6 +2447,11 @@ def _build_ical_feed(trip_data: dict) -> str:
                 to_tz = (_resolve_airport_timezone(title)
                            or _resolve_gps_timezone(trip_data, title)
                            or ICAL_TIMEZONE)
+            # DEBUG: log timezone resolution
+            _logger.info(
+                "ical_tz_resolved kind=%s id=%s title=%r from_tz=%s to_tz=%s",
+                kind_str, item_id, title, from_tz, to_tz
+            )
             start_dt, start_tz = _ical_dt(item.get("reservation_time"), from_tz)
             end_dt, end_tz = "", ""
             # INFO: log what time fields are available for iCal generation
