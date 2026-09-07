@@ -2,6 +2,11 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.4.15
+
+### Fixed
+- Fix iCal Google Calendar timezone issue by removing X-WR-TIMEZONE header (Google now uses event-level TZID)
+
 ## 3.4.14
 
 ### Fixed
