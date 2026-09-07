@@ -2219,11 +2219,10 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
             tz_obj.utcoffset(datetime.now())
             naive = datetime.fromisoformat(value)
             # reservation_time from TREK is the local wall-clock time at the airport,
-            # NOT UTC.  Convert to UTC and use Z suffix so Google Calendar displays
-            # the correct time in the user's local timezone.
+            # NOT UTC.  Return the local time with the IANA tz name so that
+            # Google Calendar displays it correctly using the VTIMEZONE definition.
             local = naive.replace(tzinfo=tz_obj)
-            utc = local.astimezone(ZoneInfo("UTC"))
-            return utc.strftime("%Y%m%dT%H%M%SZ"), ""
+            return local.strftime("%Y%m%dT%H%M%S"), tz
         except Exception:
             pass
     return value.replace("-", "").replace(":", ""), ""
