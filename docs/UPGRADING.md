@@ -1,10 +1,10 @@
-# Upgrading to 2.1.1
+# Upgrading to 3.5.0
 
 This procedure upgrades an existing TREK Guest Portal installation to the current Docker Compose layout.
 
-## Refreshable guest links in 2.1.1
+## Refreshable guest links in 3.5.0
 
-Version 2.1.1 keeps the complete owner-generated Guest Portal URL fragment after session establishment instead of rewriting the browser back to the bare Guest Portal root. This means:
+Version 3.5.0 keeps the complete owner-generated Guest Portal URL fragment after session establishment instead of rewriting the browser back to the bare Guest Portal root. This means:
 
 - `#trip=...`, optional `journey=...`, and `title=...` metadata remain in the address bar;
 - a normal browser refresh can POST the same native share capabilities to `/api/session` and rebuild the guest session automatically;
@@ -13,7 +13,7 @@ Version 2.1.1 keeps the complete owner-generated Guest Portal URL fragment after
 
 Because the fragment contains bearer share capabilities, anyone who can copy the complete Guest Portal URL has the same read-only access as the underlying TREK/Journey public shares. Avoid publishing active guest URLs in logs, tickets, screenshots, or public repositories.
 
-Version 2.1.1 also retains the v1.2.1 privacy/timeline behavior: confirmation/reference identifiers are stripped before browser delivery, place-linked events remain attached to their Plan stops, flights use airport/assignment ordering, and accommodations show separate **Check-in**, intermediate **Stay**, and **Check-out** entries.
+Version 3.5.0 retains the v1.2.1 privacy/timeline behavior: confirmation/reference identifiers are stripped before browser delivery, place-linked events remain attached to their Plan stops, flights use airport/assignment ordering, and accommodations show separate **Check-in**, intermediate **Stay**, and **Check-out** entries.
 
 ## Important deployment change
 
@@ -52,8 +52,8 @@ Do not publish or commit the backup because it may contain provider credentials 
 Download:
 
 ```text
-trek-guest-portal-2.1.1.zip
-trek-guest-portal-companion-2.1.1.zip
+trek-guest-portal-3.5.0.zip
+trek-guest-portal-companion-3.5.0.zip
 ```
 
 The first file is the TREK plugin. The second is the companion deployment.
@@ -82,7 +82,7 @@ One safe approach is to extract into a temporary directory, then copy the distri
 ```bash
 rm -rf /tmp/trek-guest-portal-new
 mkdir -p /tmp/trek-guest-portal-new
-unzip trek-guest-portal-companion-2.1.1.zip -d /tmp/trek-guest-portal-new
+unzip trek-guest-portal-companion-3.5.0.zip -d /tmp/trek-guest-portal-new
 ```
 
 Copy the new application and documentation while leaving local state intact:

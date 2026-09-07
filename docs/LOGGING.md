@@ -1,6 +1,6 @@
 # Logging and observability
 
-TREK Guest Portal v2.1.1 provides full operational logging for the guest-facing system without logging bearer share tokens, API keys, cookies, passwords, confirmation numbers, email addresses, or phone numbers.
+TREK Guest Portal v3.5.0 provides full operational logging for the guest-facing system without logging bearer share tokens, API keys, cookies, passwords, confirmation numbers, email addresses, or phone numbers.
 
 ## Log streams
 

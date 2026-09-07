@@ -34,7 +34,7 @@ Never commit:
 The included GitHub Actions release workflow runs when you push a version tag:
 
 ```bash
-git tag v2.1.1
+git tag v3.5.0
 git push origin v2.1.1
 ```
 

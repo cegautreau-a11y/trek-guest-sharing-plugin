@@ -2,6 +2,11 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.5.0
+
+### Changed
+- Remove Google Calendar and Outlook Calendar instructions from Calendar tab; Apple Calendar is now the only supported calendar subscription option
+
 ## 3.4.15
 
 ### Fixed
