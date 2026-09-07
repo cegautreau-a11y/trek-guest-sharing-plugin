@@ -2198,8 +2198,8 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
     """Format an ISO-8601 datetime string as an iCal DTSTART/DTEND value.
 
     Returns a (formatted_string, tz_name) tuple.  tz_name is empty when no
-    conversion was applied.  When tz is provided, converts to UTC and returns
-    Z-suffix format to avoid VTIMEZONE interpretation issues with Google Calendar.
+    conversion was applied.  Converts to UTC and uses Z suffix to avoid any
+    VTIMEZONE interpretation ambiguity with Google Calendar.
     """
     if not value:
         return "", ""
@@ -2219,10 +2219,11 @@ def _ical_dt(value: str | None, tz: str | None = None, is_date: bool = False) ->
             tz_obj.utcoffset(datetime.now())
             naive = datetime.fromisoformat(value)
             # reservation_time from TREK is the local wall-clock time at the airport,
-            # NOT UTC.  Return the local time with the IANA tz name so that
-            # Google Calendar (with VTIMEZONE blocks present) can display it correctly.
+            # NOT UTC.  Convert to UTC and use Z suffix so Google Calendar displays
+            # the correct time in the user's local timezone.
             local = naive.replace(tzinfo=tz_obj)
-            return local.strftime("%Y%m%dT%H%M%S"), tz
+            utc = local.astimezone(ZoneInfo("UTC"))
+            return utc.strftime("%Y%m%dT%H%M%SZ"), ""
         except Exception:
             pass
     return value.replace("-", "").replace(":", ""), ""
