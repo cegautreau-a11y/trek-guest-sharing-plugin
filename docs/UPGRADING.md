@@ -60,7 +60,7 @@ The first file is the TREK plugin. The second is the companion deployment.
 
 ## 3. Update the TREK plugin
 
-Upload `trek-guest-portal-2.1.1.zip` through **TREK → Admin → Plugins** and enable/update Guest Portal.
+Upload `trek-guest-portal-3.5.0.zip` through **TREK → Admin → Plugins** and enable/update Guest Portal.
 
 Existing per-trip Guest Portal configuration remains in the plugin's own TREK-managed database.
 
@@ -176,7 +176,7 @@ curl -s http://127.0.0.1:8088/health
 Expected:
 
 ```json
-{"ok":true,"version":"2.1.1"}
+{"ok":true,"version":"3.5.0"}
 ```
 
 Use the configured LAN bind address instead of loopback when the reverse proxy is remote.

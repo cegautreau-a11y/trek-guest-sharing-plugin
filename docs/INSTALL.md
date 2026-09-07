@@ -326,7 +326,7 @@ curl -s http://127.0.0.1:8088/health
 Expected response:
 
 ```json
-{"ok":true,"version":"2.1.1"}
+{"ok":true,"version":"3.5.0"}
 ```
 
 Then verify the HTTPS guest origin:

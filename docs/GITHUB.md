@@ -35,7 +35,7 @@ The included GitHub Actions release workflow runs when you push a version tag:
 
 ```bash
 git tag v3.5.0
-git push origin v2.1.1
+git push origin v3.5.0
 ```
 
 It validates the source, packages the plugin and companion, and creates GitHub release assets.
