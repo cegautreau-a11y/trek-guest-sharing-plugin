@@ -1,18 +1,18 @@
 # Fresh Installation
 
-This is the complete first-time installation procedure for TREK Guest Portal 3.4.13 using Docker Compose.
+This is the complete first-time installation procedure for TREK Guest Portal 3.4.14 using Docker Compose.
 
 ## Step 1 — Download the release files
 
 Download these two files from the release:
 
 ```text
-trek-guest-portal-3.4.13.zip
-trek-guest-portal-companion-3.4.13.zip
+trek-guest-portal-3.4.14.zip
+trek-guest-portal-companion-3.4.14.zip
 ```
 
-- `trek-guest-portal-3.4.13.zip` is uploaded directly to TREK. Do not unzip it first.
-- `trek-guest-portal-companion-3.4.13.zip` is extracted on the Docker host.
+- `trek-guest-portal-3.4.14.zip` is uploaded directly to TREK. Do not unzip it first.
+- `trek-guest-portal-companion-3.4.14.zip` is extracted on the Docker host.
 
 Optionally verify the published SHA-256 checksums before installation.
 
@@ -23,7 +23,7 @@ In TREK:
 1. Sign in as an administrator.
 2. Open **Admin → Plugins**.
 3. Choose **Upload**.
-4. Select `trek-guest-portal-3.4.13.zip`.
+4. Select `trek-guest-portal-3.4.14.zip`.
 5. Review the requested permissions:
 
 ```text
@@ -41,7 +41,7 @@ This guide uses `/opt/trek-guest-portal`:
 
 ```bash
 sudo mkdir -p /opt/trek-guest-portal
-sudo unzip trek-guest-portal-companion-3.4.13.zip -d /opt/trek-guest-portal
+sudo unzip trek-guest-portal-companion-3.4.14.zip -d /opt/trek-guest-portal
 cd /opt/trek-guest-portal
 ```
 
