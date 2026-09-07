@@ -2587,11 +2587,8 @@ def _build_ical_feed(trip_data: dict) -> str:
     if feed_tz_counts:
         primary_tz = max(feed_tz_counts, key=lambda tz: feed_tz_counts[tz])
 
-    # Set the calendar's default timezone to the primary timezone.
-    # This tells Google Calendar what timezone to use as the baseline.
-    # Individual events can override via TZID= in DTSTART/DTEND.
-    if primary_tz:
-        lines.append(f"X-WR-TIMEZONE:{primary_tz}")
+    # Note: X-WR-TIMEZONE can cause Google Calendar to ignore event-level TZID.
+    # Each event has its own TZID= in DTSTART/DTEND, so X-WR-TIMEZONE is not needed.
 
     # Add VTIMEZONE blocks for each timezone used in the feed.
     for tz_name in sorted(feed_tz_counts.keys()):
