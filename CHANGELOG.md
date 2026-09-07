@@ -2,6 +2,24 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.5.1
+
+### Changed
+- **Documentation refresh**: Comprehensive docs review and update for v3.5.0 consistency
+
+### Fixed
+- **FLIGHTS.md polling intervals**: Corrected browser-side polling intervals to match actual code (upcoming flights checked every 10 minutes, not 30; active flights at 1 minute)
+- **TROUBLESHOOTING.md "Next auto refresh" section**: Replaced legacy v1.1.0 text with current refresh behavior
+
+### Added
+- **docs/CALENDAR.md**: Dedicated calendar documentation covering iCal/WebCal feed routes, timezone handling, supported clients (Apple Calendar only), per-trip enablement, configuration, and troubleshooting
+- **CONFIGURATION.md**: Added `ICAL_TIMEZONE`, `GUEST_PLUGIN_PATH`, `mapbox3d`, `mapboxHighQuality`, and `LOG_PROXY_DETAILS` environment variables
+- **PREREQUISITES.md**: Added Mapbox configuration options (`MAPBOX_STYLE`, `MAPBOX_3D`, `MAPBOX_HIGH_QUALITY`)
+- **PHOTOS.md**: Documented `/api/photos/` proxy endpoint and Journey photos support
+
+### Removed
+- **ARCHITECTURE.md**: Calendar section moved to dedicated CALENDAR.md; Google/Outlook calendar references removed
+
 ## 3.5.0
 
 ### Changed
