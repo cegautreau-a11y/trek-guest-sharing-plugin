@@ -1,5 +1,31 @@
 'use strict';
 
+/**
+ * TREK Guest Portal — TREK-side plugin.
+ *
+ * Runs inside the TREK plugin sandbox as an authenticated, admin-only
+ * companion to the public Guest Portal container.  Responsibilities:
+ *
+ *  1. Store per-trip Guest Portal configuration in a plugin-owned SQLite
+ *     table (native TREK/Journey share tokens, display title, portal base
+ *     URL and per-trip iCal enablement).
+ *  2. Serve the authenticated Admin UI routes (GET/POST /config) that the
+ *     client/index.html settings page talks to.
+ *
+ * Security model:
+ *  - Share tokens are supplied by the administrator through the Admin UI
+ *    and are never written to logs (only their presence is logged).
+ *  - Every route re-validates that the authenticated caller can read the
+ *    requested trip before touching the configuration table.
+ *  - The `portal_token` column is a legacy schema field retained only to
+ *    satisfy the original table layout; it plays no part in guest
+ *    authorization (the public companion mints its own sessions).
+ *
+ * The public-facing guest experience lives entirely in the companion
+ * container (companion/server/server.py); this plugin never proxies guest
+ * traffic.
+ */
+
 const { definePlugin } = require('trek-plugin-sdk');
 const crypto = require('node:crypto');
 
@@ -7,7 +33,11 @@ const crypto = require('node:crypto');
 // HTTP response and request-normalization helpers
 // ---------------------------------------------------------------------------
 
-/** Build a non-cacheable TREK plugin HTTP response. */
+/**
+ * Build a non-cacheable TREK plugin HTTP response. Every response is sent
+ * with `cache-control: no-store` so intermediaries never retain guest-portal
+ * configuration data.
+ */
 function response(status, body, contentType = 'application/json; charset=utf-8') {
   return {
     status,
@@ -56,15 +86,18 @@ function cleanToken(value, type) {
   let raw = String(value || '').trim();
   if (!raw) return '';
 
+  // Fast path: the value is already a bare token (no URL punctuation).
   if (!raw.includes('/') && !raw.includes('?') && !raw.includes('#')) {
     return raw.replace(/[^A-Za-z0-9_-]/g, '');
   }
 
-  let pathname = raw;
-  try {
-    pathname = new URL(raw, 'https://trek.invalid').pathname;
-  } catch (_) {}
+  // Otherwise treat the value as a pasted share URL and extract the token
+  // from the final path segment of a known share endpoint.
+  let pathname = new URL(raw, 'https://trek.invalid').pathname;
 
+  // TREK trip shares: /shared/<token> or /api/shared/<token>.
+  // Journey shares have historically appeared under several path shapes,
+  // all matched below.
   const patterns = type === 'trip'
     ? [/\/shared\/([^/?#]+)/i, /\/api\/shared\/([^/?#]+)/i]
     : [
@@ -92,6 +125,9 @@ function cleanToken(value, type) {
 /**
  * Normalize the administrator-configured guest base. Absolute HTTP(S) URLs are
  * used for dedicated guest origins; absolute paths support same-origin installs.
+ *
+ * Returns '' when the value is neither an HTTPS URL nor a rooted absolute
+ * path — the caller turns '' into a 400 response.
  */
 function cleanPortalBase(value) {
   const raw = String(value || '').trim();
@@ -190,7 +226,7 @@ module.exports = definePlugin({
     await ctx.db.migrate('003_enable_ical', `
       ALTER TABLE portals ADD COLUMN enable_ical INTEGER NOT NULL DEFAULT 0
     `);
-    ctx.log.info('Guest Portal v3.6.0 loaded');
+    ctx.log.info('Guest Portal v3.6.1 loaded');
   },
 
   routes: [
@@ -234,13 +270,20 @@ module.exports = definePlugin({
           const body = parseBody(req);
           tripId = String(body.tripId || '');
           ctx.log.info(`Guest Portal config write start trip=${tripId || 'missing'} has_trip_share=${Boolean(body.tripShare)} has_journey_share=${Boolean(body.journeyShare)} has_portal_base=${Boolean(body.portalBase)} has_enable_ical=${body.enableIcal !== undefined}`);
+          // Authorize first: the caller must be able to read the trip before
+          // any configuration is written for it.
           const trip = await requireTripAccess(ctx, tripId);
+          // Normalize every externally supplied value before it touches the
+          // database — tokens are stripped out of pasted URLs and the portal
+          // base must be an HTTPS origin or rooted absolute path.
           const shareToken = cleanToken(body.tripShare, 'trip');
           const journeyToken = cleanToken(body.journeyShare, 'journey');
           const portalBase = cleanPortalBase(body.portalBase);
           const title = String(body.title || '').trim().slice(0, 160);
           const enableIcal = Boolean(body.enableIcal);
 
+          // A trip share is mandatory (it is the trip itinerary source); a
+          // journey share is optional (only needed for the Photos tab).
           if (!shareToken) {
             return json(400, { error: 'A valid TREK Trip Share URL or token is required.' });
           }
@@ -248,6 +291,10 @@ module.exports = definePlugin({
             return json(400, { error: 'Guest Portal URL must be an HTTPS URL or an absolute path such as /guest-portal/.' });
           }
 
+          // Upsert: update in place when configuration exists, otherwise
+          // insert a fresh row with a new legacy portal token. The trip
+          // title is captured at save time so the Admin UI can display it
+          // without an extra lookup.
           const existing = await getPortal(ctx, tripId);
           if (existing) {
             await ctx.db.exec(

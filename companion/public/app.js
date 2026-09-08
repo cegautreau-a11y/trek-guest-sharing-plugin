@@ -1,5 +1,26 @@
 'use strict';
 
+/**
+ * TREK Guest Portal — browser application.
+ *
+ * Single-page guest experience rendered from the share capabilities carried
+ * in the URL fragment (#trip=...&journey=...). The fragment never leaves the
+ * browser except in the body of POST /api/session, which exchanges it for an
+ * HttpOnly session cookie; every subsequent API call uses the cookie alone.
+ *
+ * Tabs:
+ *   plan         — unified day-by-day timeline (stops, transport, bookings)
+ *   flights      — transport cards with optional live provider status
+ *   cars         — car/taxi reservations
+ *   reservations — accommodations and non-transport bookings
+ *   photos       — Journey gallery, optionally date-enriched via Immich
+ *   calendar     — iCal/WebCal subscription link (when enabled per trip)
+ *
+ * Map rendering uses Mapbox GL (the only browser-side third-party runtime
+ * dependency); flight polling cadence is dictated by the server-provided
+ * refreshAfterSeconds/pollAfterSeconds hints.
+ */
+
 (() => {
   const app = document.getElementById('app');
 
@@ -1920,8 +1941,8 @@ function fatal(message) {
       const toEndpoint = eps[i + 1] || {};
       legs.push({
         index:i,
-        from:text(entry.from, fromEndpoint.code, m.departure_airport),
-        to:text(entry.to, toEndpoint.code, m.arrival_airport),
+        from:text(entry.from, fromEndpoint.code, m.departure_airport, m.pickup_location),
+        to:text(entry.to, toEndpoint.code, m.arrival_airport, m.return_location),
         airline:text(entry.airline, m.airline),
         airlineCode:text(entry.airline_code, m.airline_code),
         flight:text(entry.flight_number, entry.flightNumber, m.flight_number, m.flightNumber),

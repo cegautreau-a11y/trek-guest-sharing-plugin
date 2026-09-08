@@ -7,6 +7,22 @@ TREK `app` service, and provides server-side integrations for live flight status
 The hardened deployment does not mount TREK plugin databases at runtime. Guest
 requests are authorized by HttpOnly sessions created from native
 TREK/Journey public-share capabilities.
+
+Module layout (search for the banner comments to jump to a section):
+
+    CONFIGURATION         -- environment parsing, secrets, feature flags
+    AIRPORT TIMEZONES     -- embedded IANA lookup + SQLite cache for flights
+    RATE LIMITS / METRICS -- in-process counters, trusted-proxy parsing
+    OBSERVABILITY         -- structured key-value logging helpers
+    PERSISTENT CACHE      -- SQLite-backed flight payload cache
+    UPSTREAM ACCESS       -- bounded TREK API fetch helpers
+    PHOTO DATES           -- embedded EXIF/TIFF parsing + Immich integration
+    DATA SANITIZATION     -- confirmation-code stripping for guest payloads
+    SHARES & SESSIONS     -- TREK share fetching, guest session lifecycle
+    LIVE FLIGHT DATA      -- AeroDataBox / adsb.fi integration and TTL planning
+    ICAL FEED             -- RFC 5545 VCALENDAR generation
+    HTTP HANDLER          -- request routing, static files, API endpoints
+    RUNTIME               -- resource limits, heartbeat, server bootstrap
 """
 
 from __future__ import annotations
@@ -119,6 +135,16 @@ _AIRPORT_TZ_LOADED = False
 
 # Embedded airport timezone data - comprehensive mapping for iCal timezone resolution
 # This data is used to build the SQLite database on first run
+# ---------------------------------------------------------------------------
+# SECTION: Airport timezones
+# IATA code → IANA timezone resolution for flight events. A curated embedded
+# mapping seeds a SQLite database on first run (writable /cache directory);
+# subsequent lookups hit the database and fall back to embedded data if the
+# database is unavailable (e.g. read-only filesystem). The embedded table is
+# intentionally comprehensive for regions guests actually fly, and is the
+# last-resort fallback when TREK metadata/endpoints carry no timezone.
+# ---------------------------------------------------------------------------
+
 _EMBEDDED_AIRPORT_TZ_DATA = {
     # Brazil
     "GRU": "America/Sao_Paulo", "GIG": "America/Sao_Paulo", "CGH": "America/Sao_Paulo",
@@ -424,6 +450,14 @@ ADSB_TIMEOUT = float(os.environ.get("ADSB_TIMEOUT", "8"))
 LIVE_FLIGHT_MAX_CACHE = int(os.environ.get("LIVE_FLIGHT_MAX_CACHE", "256"))
 GUEST_CACHE_DB = pathlib.Path(os.environ.get("GUEST_CACHE_DB", "/cache/guest-portal.db")).resolve()
 GUEST_CACHE_MAX_ROWS = int(os.environ.get("GUEST_CACHE_MAX_ROWS", "512"))
+
+# ---------------------------------------------------------------------------
+# SECTION: Observability
+# Structured key-value logging. Every log line carries an event name plus
+# bounded, non-sensitive fields; share tokens are reduced to short reference
+# prefixes by _token_ref() before they ever reach a log sink.
+# ---------------------------------------------------------------------------
+
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").strip().upper() or "INFO"
 LOG_FORMAT = os.environ.get("LOG_FORMAT", "kv").strip().lower() or "kv"
 FULL_LOGGING = os.environ.get("FULL_LOGGING", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -443,11 +477,19 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.6.0"
-PRODID = "-//TREK Guest Portal//NONSGML v3.6.0//EN"
+VERSION = "3.6.1"
+PRODID = "-//TREK Guest Portal//NONSGML v3.6.1//EN"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+# ---------------------------------------------------------------------------
+# SECTION: In-process state
+# All runtime state lives in module-level dicts guarded by dedicated locks.
+# The server is multi-threaded (ThreadingHTTPServer), so every shared
+# structure below has a matching *_lock. Nothing here is persisted except
+# the flight payload cache (see SECTION: Persistent cache).
+# ---------------------------------------------------------------------------
 
 _share_cache: dict[str, tuple[float, dict]] = {}
 _share_cache_lock = threading.Lock()
@@ -669,6 +711,13 @@ HOP_BY_HOP = {
 }
 
 
+# ---------------------------------------------------------------------------
+# SECTION: Persistent cache
+# Live flight payloads are cached in a small SQLite database so a companion
+# restart (or provider quota exhaustion) still serves recent flight data.
+# Rows are keyed by (trip_id, reservation_id) and bounded by GUEST_CACHE_MAX_ROWS.
+# ---------------------------------------------------------------------------
+
 def json_bytes(obj) -> bytes:
     """Serialize an object to compact UTF-8 JSON bytes."""
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -818,6 +867,14 @@ def _decorate_cached_payload(fetched_ms: int, payload: dict, trip_id: str, reser
     return out
 
 
+# ---------------------------------------------------------------------------
+# SECTION: Upstream access
+# All TREK-originated HTTP traffic funnels through upstream_get() /
+# upstream_read_prefix(). Requests are bounded by UPSTREAM_TIMEOUT and
+# MAX_JSON_BODY, use the internal `app` hostname, and log only sanitized
+# request targets (never tokens or query strings).
+# ---------------------------------------------------------------------------
+
 def upstream_get(path: str, incoming_host: str = "") -> tuple[int, list[tuple[str, str]], bytes]:
     """Fetch a bounded anonymous TREK upstream response with sanitized logging."""
     conn = http.client.HTTPConnection(TREK_HOST, TREK_PORT, timeout=UPSTREAM_TIMEOUT)
@@ -880,6 +937,15 @@ def upstream_read_prefix(path: str, limit: int, incoming_host: str = "") -> tupl
     finally:
         conn.close()
 
+
+# ---------------------------------------------------------------------------
+# SECTION: Photo dates
+# Two independent strategies resolve the original capture date for a Journey
+# photo: (1) parse EXIF/XMP date metadata directly from the first bytes of
+# the image (avoids an Immich round trip), and (2) query the configured
+# Immich server for the asset's capture date. Results are memoized in
+# _photo_date_cache / _immich_date_cache respectively.
+# ---------------------------------------------------------------------------
 
 def _embedded_date_key(value: str) -> str | None:
     """Normalize an embedded EXIF/XMP date string to a calendar date."""
@@ -1166,7 +1232,7 @@ _GUEST_CONFIRMATION_NORMALIZED_KEYS = {
 def _is_guest_confirmation_key(key: object, *, strip_plain_reference: bool = False) -> bool:
     """Return whether a shared-trip field can reveal a booking confirmation/reference."""
     normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
-    if "confirmation" in normalized or normalized in _GUEST_CONFIRMATION_NORMALIZED_KEYS:
+    if "confirmation" in normalized:
         return True
     if normalized.startswith("bookingreference") or normalized.startswith("reservationreference"):
         return True
@@ -1220,6 +1286,15 @@ def _guest_trip_payload(data: dict) -> dict:
             ]
     return sanitized
 
+
+# ---------------------------------------------------------------------------
+# SECTION: Shares & sessions
+# Native TREK/Journey share payloads are fetched through the anonymous share
+# endpoints and cached briefly (SHARE_CACHE_TTL). Guest sessions exchange
+# share capabilities — supplied once via the URL fragment — for an HttpOnly
+# cookie; all subsequent guest API calls authorize with the session, never
+# with the raw tokens.
+# ---------------------------------------------------------------------------
 
 def get_shared_trip(token: str, incoming_host: str = "") -> dict:
     """Fetch and briefly cache a native TREK public trip share."""
@@ -1420,6 +1495,15 @@ def _session_from_cookie(cookie_header: str | None) -> tuple[str | None, dict | 
         return sid, dict(item)
 
 
+# ---------------------------------------------------------------------------
+# SECTION: Live flight data
+# Optional integrations with AeroDataBox (scheduled + status by flight number)
+# and adsb.fi (live positions by registration/callsign). Payloads are built in
+# two flavors — an "upcoming" estimate before the API window opens and a "live"
+# payload once real provider data is available — with per-flight TTL planning
+# that balances provider quota against browser polling frequency.
+# ---------------------------------------------------------------------------
+
 def get_aerodatabox_key() -> tuple[str, str]:
     """Return the configured AeroDataBox key and its non-sensitive source.
 
@@ -1537,7 +1621,7 @@ def _reservation_legs(reservation: dict, reference: dict | None, reservation_id:
     meta = _parse_meta(reservation)
     raw_legs = meta.get("legs") if isinstance(meta.get("legs"), list) else None
     eps = _ordered_endpoints(reservation)
-    leg_count = min(6, max(len(raw_legs or []), len(eps) - 1 if len(eps) > 1 else 1 if (raw_legs or meta) else 0))
+    leg_count = min(6, max(len(raw_legs or []) if raw_legs else 0, len(eps) - 1 if len(eps) > 1 else 1 if (raw_legs or meta) else 0))
     legs: list[dict] = []
 
     for idx in range(leg_count):
@@ -2229,6 +2313,22 @@ def get_live_flight_payload(reservation: dict, reservation_id: str, trip_id: str
         return json.loads(json.dumps(payload))
 
 
+
+# ---------------------------------------------------------------------------
+# SECTION: iCal feed
+# Generates the RFC 5545 VCALENDAR subscription feed from a shared trip
+# payload. Key behaviors (see docs/CALENDAR.md for the full contract):
+#
+#   * Times are emitted as local wall-clock values with TZID= prefixes —
+#     never UTC "Z" values with a TZID, which Apple Calendar misreads.
+#   * Multi-leg flights expand into one VEVENT per leg, each carrying its
+#     own flight number from metadata.legs and per-endpoint timezones.
+#   * Hotels produce two non-overlapping 1-hour VEVENTs (check-in ends at
+#     the check-in time, check-out starts at the check-out time) instead of
+#     a multi-day stay event that Apple Calendar would visually collapse.
+#   * Confirmation codes are stripped and never reach the feed.
+# ---------------------------------------------------------------------------
+
 def _ical_escape(text: str) -> str:
     """Escape a string for use in an iCal property value."""
     return text.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
@@ -2498,6 +2598,26 @@ def _build_ical_feed(trip_data: dict) -> str:
             seen_accommodation_ids.add(acc_id)
         items.append({**a, "_kind": "accommodation", "_type": "accommodation"})
 
+    # Build the flat list of feedable items. Hotels arrive through two
+    # channels that must be reconciled:
+    #   1. the accommodations array — full stay records with day range and
+    #      time-only check_in/check_out values (preferred source);
+    #   2. reservations with type "hotel" — single-day records whose dates
+    #      live in metadata.check_in_time/check_out_time.
+    # A hotel reservation whose accommodation_id matches an already-accepted
+    # accommodation is a duplicate: it is skipped, but its human title is
+    # carried over because reservation titles ("Hotel Tru By Hilton
+    # Criciúma") are usually more descriptive than place names ("Criciúma").
+    items: list[dict] = []
+
+    seen_accommodation_ids: set[str] = set()
+
+    for a in accommodations:
+        acc_id = str(a.get("id") or "")
+        if acc_id:
+            seen_accommodation_ids.add(acc_id)
+        items.append({**a, "_kind": "accommodation", "_type": "accommodation"})
+
     for r in reservations:
         k = kind(r)
         if k in TRANSPORT_KINDS:
@@ -2505,9 +2625,7 @@ def _build_ical_feed(trip_data: dict) -> str:
         elif k == "hotel":
             acc_link = str(r.get("accommodation_id") or "").split(".")[0]
             if acc_link and acc_link in seen_accommodation_ids:
-                # The accommodation record already covers this hotel.  Prefer
-                # the reservation's title (e.g. "Hotel Tru By Hilton Criciúma")
-                # over the accommodation's place name (e.g. "Criciúma").
+                # Duplicate of an accommodation record — keep the better name.
                 r_title = str(r.get("title") or "").strip()
                 if r_title:
                     for it in items:
@@ -2518,7 +2636,8 @@ def _build_ical_feed(trip_data: dict) -> str:
                             it["_display_name"] = r_title
                             break
                 continue
-            # Treat as accommodation so check-in/check-out events are emitted.
+            # Unlinked hotel reservation — promote it so check-in/check-out
+            # events are still emitted from its metadata times.
             items.append({**r, "_kind": "accommodation", "_type": "accommodation"})
         else:
             # Non-transport reservation — treated as a general event (restaurant, tour, etc.)
@@ -2542,7 +2661,7 @@ def _build_ical_feed(trip_data: dict) -> str:
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//TREK Guest Portal//NONSGML v3.6.0//EN",
+        "PRODID:-//TREK Guest Portal//NONSGML v3.6.1//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
@@ -2821,7 +2940,7 @@ def _build_ical_feed(trip_data: dict) -> str:
                 needle = name.strip().lower()
                 for p in (trip_data.get("places") or []):
                     pname = str(p.get("name") or "").strip().lower()
-                    if pname and (pname == needle or needle in pname or pname in needle):
+                    if pname and ( pname == needle or needle in pname or pname in needle):
                         try:
                             plat = float(p.get("lat") or p.get("latitude") or "")
                             plng = float(p.get("lng") or p.get("lon") or p.get("longitude") or "")
@@ -3010,6 +3129,17 @@ def reservation_kind(item: dict) -> str:
             return str(value).strip().lower()
     return ""
 
+
+# ---------------------------------------------------------------------------
+# SECTION: HTTP handler
+# Single request handler for the entire companion surface:
+#   * static guest portal assets (read-only from PUBLIC_ROOT)
+#   * guest session lifecycle (POST /api/session, /api/session/logout)
+#   * guest data APIs (/api/trip, /api/ical-link, flight provider refresh)
+#   * reverse-proxied TREK share/Journey/photo reads
+#   * the generated iCal feed routes (/calendar/..., /ical/...)
+# All responses pass through the no-store policy and structured logging.
+# ---------------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
     """HTTP request handler for static assets, guest APIs, sessions and media proxying."""
@@ -3614,6 +3744,14 @@ def _persistent_cache_stats() -> tuple[int | str, int | str]:
     except Exception:
         return "error", "error"
 
+
+# ---------------------------------------------------------------------------
+# SECTION: Runtime
+# Heartbeat logging, resource limits, and server bootstrap. main() hardens
+# the process (umask, resource caps, signal handling) before binding the
+# ThreadingHTTPServer, so the failure mode for misconfiguration is a clean
+# startup error rather than degraded runtime behavior.
+# ---------------------------------------------------------------------------
 
 def _runtime_heartbeat(stop_event: threading.Event):
     """Emit periodic bounded runtime/cache/metric health events until shutdown."""

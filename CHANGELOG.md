@@ -2,6 +2,12 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.6.1
+
+### Changed
+- **Code documentation**: Added module-layout table of contents and section banners to the companion server, detailed inline documentation for the hotel deduplication logic, plugin module header with security model, browser app header, and request-normalization comments
+- **Bug fix**: Repaired a broken conditional in `_is_guest_confirmation_key` that caused a Python syntax error
+
 ## 3.6.0
 
 ### Changed
