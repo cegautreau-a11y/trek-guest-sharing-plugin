@@ -2,6 +2,23 @@
 
 All notable project changes represented by TREK Guest Portal releases are documented here. Earlier pre-1.1 development history remains consolidated in the 1.1.0 feature/security baseline.
 
+## 3.6.0
+
+### Changed
+- **Documentation refresh**: CALENDAR.md documents the full feed behavior (timezone resolution, flight leg expansion, hotel check-in/check-out events, hotel name preference, feed freshness); README.md Calendar feature description updated
+
+### Fixed
+- **iCal hotel names**: When a hotel reservation dedupes into its linked accommodation record, the reservation's `title` (e.g. "Hotel Tru By Hilton Criciúma") is now preferred over the accommodation's place name (e.g. "Criciúma") for check-in/check-out event summaries
+
+## 3.5.20
+
+## 3.5.19
+
+### Fixed
+- **iCal hotel deduplication**: Hotel reservations that link to an accommodation record via `accommodation_id` are skipped, preventing duplicate check-in/check-out events for the same hotel
+- **iCal hotel timezones**: Hotel check-in/check-out events now resolve the hotel's local timezone from GPS coordinates (`place_lat`/`place_lng` or the linked place record), falling back to name matching against the trip's places list, instead of using the server's default timezone
+- **timezonefinder compatibility**: `certain_timezone_at` may not exist in newer timezonefinder versions; `timezone_at` is now used as a fallback
+
 ## 3.5.18
 
 ### Fixed

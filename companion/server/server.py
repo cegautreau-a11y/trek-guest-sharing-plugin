@@ -315,6 +315,45 @@ def _resolve_airport_timezone(airport_code: str) -> str | None:
     return None
 
 
+def _resolve_accommodation_timezone(item: dict, trip_data: dict) -> str | None:
+    """Resolve the timezone for an accommodation using its GPS coordinates.
+
+    Accommodations carry place coordinates either inline (``place_lat``/
+    ``place_lng``) or via a linked place record in trip_data["places"].
+    Returns the IANA timezone name, or None if it cannot be determined.
+    """
+    lat = lng = None
+    try:
+        lat = float(item.get("place_lat") or item.get("lat") or item.get("latitude") or "")
+        lng = float(item.get("place_lng") or item.get("lng") or item.get("longitude") or "")
+    except (TypeError, ValueError):
+        lat = lng = None
+    # Fall back to the linked place record.
+    if lat is None or lng is None:
+        place_id = str(item.get("place_id") or "")
+        if place_id:
+            for p in (trip_data.get("places") or []):
+                if isinstance(p, dict) and str(p.get("id") or "") == place_id:
+                    try:
+                        lat = float(p.get("lat") or p.get("latitude") or "")
+                        lng = float(p.get("lng") or p.get("lon") or p.get("longitude") or "")
+                    except (TypeError, ValueError):
+                        lat = lng = None
+                    break
+    if lat is not None and lng is not None:
+        try:
+            tz = None
+            if hasattr(_TF, "certain_timezone_at"):
+                tz = _TF.certain_timezone_at(lat=lat, lng=lng)
+            if not tz:
+                tz = _TF.timezone_at(lat=lat, lng=lng)
+            if tz:
+                return tz
+        except Exception:
+            pass
+    return None
+
+
 def _resolve_gps_timezone(trip_data: dict, location_name: str) -> str | None:
     """Resolve timezone from a location name using GPS coordinates from the place database.
 
@@ -404,8 +443,8 @@ FLIGHT_UPCOMING_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_UPCOMING_P
 FLIGHT_ACTIVE_POLL_SECONDS = max(30, min(int(os.environ.get("FLIGHT_ACTIVE_POLL_SECONDS", "60")), 600))
 FLIGHT_ERROR_POLL_SECONDS = max(60, min(int(os.environ.get("FLIGHT_ERROR_POLL_SECONDS", "300")), 3600))
 
-VERSION = "3.5.18"
-PRODID = "-//TREK Guest Portal//NONSGML v3.5.18//EN"
+VERSION = "3.6.0"
+PRODID = "-//TREK Guest Portal//NONSGML v3.6.0//EN"
 
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,256}$")
 RID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -2447,20 +2486,43 @@ def _build_ical_feed(trip_data: dict) -> str:
 
     items: list[dict] = []
 
+    # Hotel-type reservations link to accommodations via accommodation_id.
+    # Prefer the accommodation record (it has the full stay dates) and use
+    # the reservation only to fill in gaps. Skip reservations that duplicate
+    # an accommodation already being processed.
+    seen_accommodation_ids: set[str] = set()
+
+    for a in accommodations:
+        acc_id = str(a.get("id") or "")
+        if acc_id:
+            seen_accommodation_ids.add(acc_id)
+        items.append({**a, "_kind": "accommodation", "_type": "accommodation"})
+
     for r in reservations:
         k = kind(r)
         if k in TRANSPORT_KINDS:
             items.append({**r, "_kind": k, "_type": "reservation"})
         elif k == "hotel":
-            # Hotel-type reservation — treat as accommodation so check-in/
-            # check-out events are emitted.
+            acc_link = str(r.get("accommodation_id") or "").split(".")[0]
+            if acc_link and acc_link in seen_accommodation_ids:
+                # The accommodation record already covers this hotel.  Prefer
+                # the reservation's title (e.g. "Hotel Tru By Hilton Criciúma")
+                # over the accommodation's place name (e.g. "Criciúma").
+                r_title = str(r.get("title") or "").strip()
+                if r_title:
+                    for it in items:
+                        if (
+                            it.get("_type") == "accommodation"
+                            and str(it.get("id") or "") == acc_link
+                        ):
+                            it["_display_name"] = r_title
+                            break
+                continue
+            # Treat as accommodation so check-in/check-out events are emitted.
             items.append({**r, "_kind": "accommodation", "_type": "accommodation"})
         else:
             # Non-transport reservation — treated as a general event (restaurant, tour, etc.)
             items.append({**r, "_kind": "event", "_type": "event"})
-
-    for a in accommodations:
-        items.append({**a, "_kind": "accommodation", "_type": "accommodation"})
 
     # Sort by earliest available datetime
     def sort_key(it: dict) -> float:
@@ -2480,7 +2542,7 @@ def _build_ical_feed(trip_data: dict) -> str:
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//TREK Guest Portal//NONSGML v3.5.18//EN",
+        "PRODID:-//TREK Guest Portal//NONSGML v3.6.0//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         f"X-WR-CALNAME:{_ical_escape(trip.get('title') or trip.get('name') or 'Trip')}",
@@ -2729,8 +2791,12 @@ def _build_ical_feed(trip_data: dict) -> str:
 
         else:  # accommodation
             place = item.get("place") or {}
+            # Prefer the linked reservation's title (set via _display_name when
+            # a hotel reservation dedupes into its accommodation record), then
+            # the accommodation's own name fields, then the place name.
             name = str(
-                place.get("name")
+                item.get("_display_name")
+                or place.get("name")
                 or item.get("name")
                 or item.get("title")
                 or item.get("reservation_title")
@@ -2747,10 +2813,36 @@ def _build_ical_feed(trip_data: dict) -> str:
             if address and address != name:
                 summary += f" ({address})"
             location = address
+            # Resolve the hotel's local timezone from its GPS coordinates so
+            # check-in/check-out events display in the hotel's local time.
+            # Fall back to matching the hotel name in the trip's places list.
+            acc_tz = _resolve_accommodation_timezone(item, trip_data)
+            if not acc_tz:
+                needle = name.strip().lower()
+                for p in (trip_data.get("places") or []):
+                    pname = str(p.get("name") or "").strip().lower()
+                    if pname and (pname == needle or needle in pname or pname in needle):
+                        try:
+                            plat = float(p.get("lat") or p.get("latitude") or "")
+                            plng = float(p.get("lng") or p.get("lon") or p.get("longitude") or "")
+                        except (TypeError, ValueError):
+                            plat = plng = None
+                        if plat is not None and plng is not None:
+                            try:
+                                if hasattr(_TF, "certain_timezone_at"):
+                                    acc_tz = _TF.certain_timezone_at(lat=plat, lng=plng)
+                                if not acc_tz:
+                                    acc_tz = _TF.timezone_at(lat=plat, lng=plng)
+                            except Exception:
+                                acc_tz = None
+                        if acc_tz:
+                            break
+            acc_tz = acc_tz or ICAL_TIMEZONE
+            start_tz = acc_tz
+            end_tz = acc_tz
             # Skip the full stay event — only emit separate check-in and
             # check-out events for accommodations.
-            start_dt, start_tz = "", ""
-            end_dt, end_tz = "", ""
+            start_dt, end_dt = "", ""
             # Mark this as an accommodation so the skip check below allows
             # the check-in/check-out events through.
             _skip_stay = True

@@ -1,4 +1,4 @@
-# TREK Guest Portal v3.5.18
+# TREK Guest Portal v3.6.0
 #
 # This is a standalone Docker Compose project. The companion joins TREK's
 # existing Docker network so TREK_HOST (normally "app") resolves through
@@ -8,7 +8,7 @@ services:
     build:
       context: /datastore/trax-guest
       dockerfile: Dockerfile
-    image: trek-guest-portal:3.5.18
+    image: trek-guest-portal:3.6.0
     container_name: trek-guest-portal
     restart: unless-stopped
     read_only: true

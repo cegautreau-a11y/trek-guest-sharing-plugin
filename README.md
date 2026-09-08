@@ -4,7 +4,7 @@
 
 TREK Guest Portal turns TREK's native public trip and Journey shares into a richer guest site without modifying the TREK application image. The project has two components: an Admin-uploadable TREK plugin that stores per-trip share configuration, and a hardened companion container that serves the anonymous guest experience.
 
-**Current release:** `3.5.18`
+**Current release:** `3.6.0`
 **TREK compatibility:** `>=4.0.0 <5.0.0`
 **Deployment:** Docker Compose  
 **License:** MIT
@@ -18,7 +18,7 @@ Guest Portal intentionally exposes five sections when the underlying TREK shares
 - **Cars & Taxis** — car and taxi reservations separated from Flights while remaining positioned in the Plan timeline.
 - **Reservations** — accommodations (including standalone `hotel` bookings) and other non-transport bookings in separate sections. Linked TREK Hotel partner records are deduplicated.
 - **Photos** — Journey gallery media grouped chronologically; optional Immich integration resolves original asset capture dates server-side.
-- **Calendar** — iCal/WebCal subscription URL for Apple Calendar and other CalDAV clients that support VTIMEZONE; times are converted to per-event airport timezones with UTC fallback.
+- **Calendar** — iCal/WebCal subscription URL for Apple Calendar and other CalDAV clients that support VTIMEZONE. Times are emitted as local wall-clock time with per-event `TZID=` (airport timezones for flights, hotel-local timezones for accommodations) and VTIMEZONE components. Multi-leg flights expand into one event per leg; hotels produce separate non-overlapping check-in/check-out events instead of a full-stay entry.
 
 Flights and Reservations remain visible even when empty. Journal, Packing, Budget, Collab, and external "Open in Maps" links are intentionally omitted from the guest view.
 
@@ -144,14 +144,14 @@ Existing installations should read [UPGRADING.md](docs/UPGRADING.md) before repl
 A release build produces:
 
 ```text
-trek-guest-portal-3.5.18.zip
-trek-guest-portal-companion-3.5.18.zip
-trek-guest-portal-3.5.18-complete-bundle.zip
+trek-guest-portal-3.6.0.zip
+trek-guest-portal-companion-3.6.0.zip
+trek-guest-portal-3.6.0-complete-bundle.zip
 ```
 
-- `trek-guest-portal-3.5.1.zip` — upload directly through **TREK → Admin → Plugins**.
-- `trek-guest-portal-companion-3.5.1.zip` — extract on the Docker host and deploy with `docker compose`.
-- `trek-guest-portal-3.5.1-complete-bundle.zip` — plugin, companion and repository documentation in one archive.
+- `trek-guest-portal-3.6.0.zip` — upload directly through **TREK → Admin → Plugins**.
+- `trek-guest-portal-companion-3.6.0.zip` — extract on the Docker host and deploy with `docker compose`.
+- `trek-guest-portal-3.6.0-complete-bundle.zip` — plugin, companion and repository documentation in one archive.
 
 `dist/SHA256SUMS` is generated alongside the release artifacts.
 

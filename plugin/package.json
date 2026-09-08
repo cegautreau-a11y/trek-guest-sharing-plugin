@@ -1,6 +1,6 @@
 {
   "name": "trek-plugin-guest-portal",
-  "version": "3.5.18",
+  "version": "3.6.0",
   "private": true,
   "type": "commonjs",
   "description": "TREK Guest Portal trip-page plugin",
